@@ -1,0 +1,13 @@
+pandas
+numpy
+pyarrow
+requests
+openpyxl
+xlrd
+python-dotenv
+scikit-learn
+lightgbm
+statsmodels
+matplotlib
+tabulate
+pytest
