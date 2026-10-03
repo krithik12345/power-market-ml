@@ -24,10 +24,10 @@ Hub → balancing authority: SP15→CISO, Mid-C→BPAT, Palo Verde→AZPS+SRP, P
 |---|---|---|---|
 | T01 | Solar is compressing the on-peak heat rate, most in spring | SP15 | **First pass done**: [report](reports/T01_sp15_solar/report.md) |
 | T01b | Batteries are blunting solar's *marginal* cannibalization | SP15 | Next: add EIA-930 `BAT` |
-| T02 | Mid-C trades at a hydro-driven discount; BPAT hydro + wind predict the Mid-C – SP15 spread | Mid-C | Needs API key |
-| T03 | PJM West heat rate is convex in load; upper-tail risk is underpriced in summer | PJM West | Needs API key, quantile models |
-| T04 | Mass Hub winter heat rate spikes are a gas-constraint regime, not a load regime | Mass Hub | Needs API key, regime clustering |
-| F01 | Next-day on-peak price forecast: can fundamentals beat persistence? | all | **SP15 done**: [report](reports/forecast_SP15/report.md) |
+| T02 | Mid-C trades at a hydro-driven discount; BPAT hydro + wind predict the Mid-C – SP15 spread | Mid-C | Data ready |
+| T03 | PJM West heat rate is convex in load; upper-tail risk is underpriced in summer | PJM West | Data ready |
+| T04 | Mass Hub winter heat rate spikes are a gas-constraint regime, not a load regime | Mass Hub | Data ready |
+| F01 | Next-day on-peak price forecast: can fundamentals beat persistence? | all | **All 5 hubs done**: `reports/forecast_*/` |
 
 ### Early findings (SP15, as of Oct 2026)
 
@@ -37,6 +37,20 @@ Hub → balancing authority: SP15→CISO, Mid-C→BPAT, Palo Verde→AZPS+SRP, P
 - Forecasting: LightGBM trained on the *day-over-day change* beats persistence in every test year
   2022–2026 (MAE 10.1 vs 11.0 $/MWh, 69% directional accuracy). The same model trained on price
   *levels* loses badly, because trees can't extrapolate into a new price regime like 2022.
+
+### Forecast results across hubs (MAE $/MWh, test years 2022+)
+
+| Hub | Persistence | Best model | Best MAE | Improvement |
+|---|---|---|---|---|
+| PJM West | 15.12 | Ridge on heat rate | 12.07 | 20% |
+| Mass Hub | 15.16 | Ridge on heat rate | 13.12 | 13% |
+| SP15 | 11.04 | LightGBM on change | 10.12 | 8% |
+| Palo Verde | 15.20 | LightGBM on change | 14.75 | 3% |
+| Mid-C | 20.21 | LightGBM on change | 19.71 | 2% |
+
+East vs West split: in gas-and-load-driven eastern markets, a simple heat-rate model works well.
+In the West, prices hinge on hydro, solar and *regional* gas basis that Henry Hub doesn't capture,
+so fundamentals barely beat persistence. That gap is the case for adding western gas and hydro data.
 
 ## Model zoo
 
