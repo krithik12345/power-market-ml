@@ -23,9 +23,9 @@ Hub → balancing authority: SP15→CISO, Mid-C→BPAT, Palo Verde→AZPS+SRP, P
 | # | Thesis | Hub | Status |
 |---|---|---|---|
 | T01 | Solar is compressing the on-peak heat rate, most in spring | SP15 | **First pass done**: [report](reports/T01_sp15_solar/report.md) |
-| T01b | Batteries are blunting solar's *marginal* cannibalization | SP15 | Next: add EIA-930 `BAT` |
-| T02 | Mid-C trades at a hydro-driven discount; BPAT hydro + wind predict the Mid-C – SP15 spread | Mid-C | Data ready |
-| T03 | PJM West heat rate is convex in load; upper-tail risk is underpriced in summer | PJM West | Data ready |
+| T01b | Batteries are blunting solar's *marginal* cannibalization | SP15 | **Not supported**: [report](reports/T01b_sp15_batteries/report.md) |
+| T02 | BPA hydro drives the Mid-C – SP15 spread | Mid-C | **Supported**: [report](reports/T02_midc_hydro/report.md) |
+| T03 | PJM West heat rate is convex in load; spike days are forecastable | PJM West | **Supported**: [report](reports/T03_pjm_convexity/report.md) |
 | T04 | Mass Hub winter heat rate spikes are a gas-constraint regime, not a load regime | Mass Hub | Data ready |
 | F01 | Next-day on-peak price forecast: can fundamentals beat persistence? | all | **All 5 hubs done**: `reports/forecast_*/` |
 
@@ -37,6 +37,21 @@ Hub → balancing authority: SP15→CISO, Mid-C→BPAT, Palo Verde→AZPS+SRP, P
 - Forecasting: LightGBM trained on the *day-over-day change* beats persistence in every test year
   2022–2026 (MAE 10.1 vs 11.0 $/MWh, 69% directional accuracy). The same model trained on price
   *levels* loses badly, because trees can't extrapolate into a new price regime like 2022.
+
+### Thesis findings
+
+- **T01b, batteries (not supported).** CAISO batteries are hidden in EIA-930's "Other" fuel, but the
+  hourly shape exposes them: about −7 GW charging at midday and +7.6 GW discharging in the evening in 2026.
+  A bigger fleet does *not* measurably weaken solar's effect on the daily on-peak heat rate. Likely
+  reason: batteries move energy *within* the HE7–22 block, so the block average barely moves. T01's
+  apparent "flattening" was mostly the 2022–23 western gas crisis.
+- **T02, Mid-C hydro (supported).** +1 GW of BPA hydro above its seasonal norm moves Mid-C − SP15 by
+  about **−$6/MWh**. From the driest to the wettest fifth of days, the median spread swings from +$17 to −$8.
+  Mid-C flipped from a discount (−$4.6, 2019–22) to a premium (+$15, 2023+). The hydro signal improves
+  next-day spread forecasts by 4%.
+- **T03, PJM convexity (supported).** The P90 heat rate steepens sharply at high load. The top load
+  decile carries **39%** of summer on-peak dollars above the median. Spike days (≥1.5× the trailing
+  30-day heat rate) are predictable from trade-date data: AUC **0.93**, vs 0.84 for a yesterday-only baseline.
 
 ### Forecast results across hubs (MAE $/MWh, test years 2022+)
 

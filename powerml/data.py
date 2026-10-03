@@ -176,3 +176,36 @@ def fundamentals(hub_key: str, refresh: bool = False) -> pd.DataFrame:
     hub = HUBS[hub_key]
     parts = [eia930_daily(ba, hub.timezone, refresh=refresh) for ba in hub.bas]
     return pd.concat(parts).groupby("date", as_index=False).sum(min_count=1)
+
+
+def eia930_hourly(ba: str, fuels, refresh: bool = False) -> pd.DataFrame:
+    """Hourly net generation by fuel (UTC periods) for one BA, long format, cached."""
+    path = CACHE / f"eia930_{ba}_hourly_{'_'.join(sorted(fuels)).lower()}.parquet"
+    if path.exists() and not refresh:
+        return pd.read_parquet(path)
+    d = eia_api("electricity/rto/fuel-type-data", {"respondent": [ba], "fueltype": list(fuels)},
+                f"{EIA930_FIRST_DAY}T00", f"{date.today().isoformat()}T00", frequency="hourly")
+    d = d[["period", "fueltype", "value"]]
+    d.to_parquet(path, index=False)
+    return d
+
+
+def caiso_storage(refresh: bool = False) -> pd.DataFrame:
+    """Daily CAISO battery charge/discharge (GWh), recovered from the hourly 'Other' series.
+
+    CAISO reports storage inside EIA-930's OTH bucket rather than as BAT. Its daily total
+    nets to ~zero (round-trip losses), but the hourly shape is unmistakable: negative at
+    midday (charging on solar) and positive in the evening (discharging into the ramp).
+    """
+    h = eia930_hourly("CISO", ["OTH"], refresh=refresh)
+    local = h["period"].dt.tz_localize("UTC").dt.tz_convert("US/Pacific")
+    h = h.assign(date=local.dt.tz_localize(None).dt.normalize())
+    daily = h.groupby("date")["value"].agg(
+        batt_discharge_gwh=lambda v: v.clip(lower=0).sum() / 1000,
+        batt_charge_gwh=lambda v: -v.clip(upper=0).sum() / 1000,
+    ).reset_index()
+    # Fleet-size proxy: trailing 90-day 95th percentile of discharge. Using capability rather
+    # than same-day dispatch avoids reverse causality (batteries discharge MORE on high-price days).
+    daily["batt_fleet_gwh"] = (daily["batt_discharge_gwh"].shift(1)
+                               .rolling(90, min_periods=30).quantile(0.95))
+    return daily
