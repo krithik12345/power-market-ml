@@ -85,6 +85,7 @@ def henry_hub() -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name="Data 1", skiprows=2)
     df.columns = ["trade_date", "gas"]
     df["trade_date"] = pd.to_datetime(df["trade_date"])
+    df["gas"] = pd.to_numeric(df["gas"], errors="coerce")
     return df.dropna().reset_index(drop=True)
 
 
@@ -131,10 +132,11 @@ def eia_api(route: str, facets: dict, start: str, end: str, frequency: str = "da
             if r.status_code == 429 or r.status_code >= 500:
                 time.sleep(5 * 2 ** attempt)
                 continue
-            r.raise_for_status()
+            if not r.ok:
+                _raise(r)
             break
         else:
-            r.raise_for_status()
+            _raise(r)
         body = r.json()["response"]
         rows.extend(body["data"])
         offset += PAGE
@@ -145,6 +147,11 @@ def eia_api(route: str, facets: dict, start: str, end: str, frequency: str = "da
         df["period"] = pd.to_datetime(df["period"])
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
     return df
+
+
+def _raise(r):
+    """Raise on a failed EIA call without echoing the request URL, which contains the API key."""
+    raise requests.HTTPError(f"EIA API returned {r.status_code}: {r.text[:300]}")
 
 
 def eia930_daily(ba: str, timezone: str, end: str | None = None, refresh: bool = False) -> pd.DataFrame:

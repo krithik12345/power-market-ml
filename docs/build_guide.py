@@ -41,7 +41,7 @@ S = {
     "sub": ParagraphStyle("sub", fontName="Serif-Italic", fontSize=13, leading=19, textColor=MUTED),
     "meta": ParagraphStyle("meta", fontName="Sans", fontSize=9.5, leading=13, textColor=MUTED),
     "h1": ParagraphStyle("h1", fontName="Sans-Semi", fontSize=21, leading=26, textColor=INK, spaceBefore=2, spaceAfter=6),
-    "h2": ParagraphStyle("h2", fontName="Sans-Semi", fontSize=13, leading=17, textColor=INK, spaceBefore=12, spaceAfter=5),
+    "h2": ParagraphStyle("h2", fontName="Sans-Semi", fontSize=13, leading=17, textColor=INK, spaceBefore=12, spaceAfter=5, keepWithNext=1),
     "h3": ParagraphStyle("h3", fontName="Sans-Semi", fontSize=10.5, leading=14, textColor=ACCENT, spaceBefore=6, spaceAfter=2),
     "p": ParagraphStyle("p", fontName="Serif", fontSize=10, leading=15, textColor=INK, spaceAfter=6),
     "b": ParagraphStyle("b", fontName="Serif", fontSize=10, leading=14.6, textColor=INK, leftIndent=15, bulletIndent=2, spaceAfter=3,
@@ -178,10 +178,11 @@ table([
     ["5. Machine learning models", "Persistence, ridge, LightGBM, modeling the change, loss functions, classifiers, partial dependence"],
     ["6. Evaluation", "Walk-forward backtests, leakage, MAE/RMSE, coverage, AUC, Brier, fair baselines"],
     ["7. The theses, walked through", "T01, T01b, T02, T03 and the forecast benchmark: method, result, limits"],
-    ["8. Research lessons", "The three times a first result was wrong, and how it was caught"],
-    ["9. Code map", "Which file does what, and which concepts it uses"],
-    ["10. Review questions", "Questions to test your understanding, with short answers"],
-    ["11. Glossary and study plan", "Terms and what to learn next"],
+    ["8. ERCOT: hourly data", "A second data source, hourly prices, and theses E1 (scarcity moved to the evening) and E2 (batteries)"],
+    ["9. Research lessons", "The five times a first result was wrong, and how it was caught"],
+    ["10. Code map", "Which file does what, and which concepts it uses"],
+    ["11. Review questions", "Questions to test your understanding, with short answers"],
+    ["12. Glossary and study plan", "Terms and what to learn next"],
 ], [1.9, 4.6])
 story.append(PageBreak())
 
@@ -202,7 +203,7 @@ B("<b>Python and pandas:</b> reading a DataFrame, filtering, merging, and groupb
   "<b>No power-market background needed.</b> Part 2 starts from zero.")
 H2("How to read it")
 P("Parts 1 to 6 build up the concepts in order: markets, data, statistics, models, evaluation. Part 7 applies all of them to the four studies "
-  "in the repo, and Part 8 covers what went wrong along the way. If you only have an hour, read Part 1, the 'key idea' notes, and Part 7. "
+  "on the EIA hubs, Part 8 extends the project to Texas with hourly ERCOT data, and Part 9 covers what went wrong along the way. If you only have an hour, read Part 1, the 'key idea' notes, Part 7 and Part 8. "
   "Each part ends with a <font color='#5a6b38'><b>Check yourself</b></font> list. If you can explain every item out loud without looking, you've got that part.")
 H2("Run it yourself")
 P("Reading is good; changing the code and predicting what happens is better. Setup takes about ten minutes:")
@@ -253,6 +254,8 @@ table([
     ["T02 Mid-C hydro", "+1 GW of Northwest hydro above normal moves Mid-C about $6/MWh lower vs SP15. Mid-C flipped from a discount to a premium after 2022.", "Supported"],
     ["T03 PJM spikes", "Heat rate is convex in load; the top 10% of load days carry 39% of summer upside. Spike days are predictable a day ahead (AUC 0.93 vs 0.84 baseline).", "Supported"],
     ["F01 Forecasts", "Models beat 'tomorrow = today' at all five hubs: 20% better at PJM West, 2% at Mid-C.", "Done"],
+    ["E1 ERCOT peak hour", "The most expensive hour moved from 5pm (demand peak) to 8pm (net-load peak). Days priced near the demand peak fell from 74% to 13%.", "Supported"],
+    ["E2 ERCOT batteries", "The evening ramp more than doubled but its price per GW fell from 2.2 (2023) to 0.1 (2026) as batteries grew to about 9 GW.", "Supported, with a caution"],
 ], [1.35, 4.15, 1.0])
 story.append(PageBreak())
 
@@ -345,8 +348,9 @@ table([
     ["EIA wholesale (ICE) power", "One hub, one trade date, one delivery period: weighted average price, high, low, volume, trades", "Yearly Excel files, 2017-2026, downloaded once and cached", "ice_power_prices()"],
     ["Henry Hub spot (RNGWHHD)", "One trade date, one $/MMBtu price", "One Excel file covering 1997 to today, refreshed daily", "henry_hub()"],
     ["EIA-930 grid data", "One BA, one day (or hour), one series: demand, demand forecast, or generation by fuel", "EIA API v2 with a free key, paginated, cached as Parquet", "eia930_daily(), eia930_hourly()"],
+    ["ERCOT day-ahead prices (Part 8)", "One ERCOT hub, one delivery date, one hour: price in $/MWh", "Yearly zip files from ERCOT's public reports site, no key", "ercot.dam_hub_prices()"],
 ], [1.35, 2.15, 1.85, 1.15])
-P("Findings during data collection that shaped the project: ERCOT North stopped appearing in the ICE files after 2018, so Texas is out. NP15 and Indiana "
+P("Findings during data collection that shaped the project: ERCOT North stopped appearing in the ICE files after 2018, so Texas prices come from ERCOT itself (Part 8). NP15 and Indiana "
   "trade too thinly for daily modeling. The regional gas files EIA used to post are no longer available, so Henry Hub is the only gas benchmark. "
   "CAISO does not report batteries as their own fuel type.")
 H2("3.2 Working with an API")
@@ -627,7 +631,7 @@ H2("T01b: Do batteries blunt cannibalization?")
 table([["Question", "Is solar's per-unit price effect shrinking because batteries absorb the midday surplus?"],
        ["Method", "Recovered CAISO batteries from hourly 'Other' data; fleet-capability proxy; solar x battery interaction; robustness against a time trend and without 2022-23; delta-method marginal-effect chart"],
        ["Result", "Not supported. Interaction -0.012 (p = 0.59); +0.153 with a time trend (p = 0.11); -0.0004 excluding 2022-23 (p = 0.98)"],
-       ["Why it matters", "Batteries shift energy from noon to evening, both inside the HE7-22 block, so the block average barely moves. Their effect lives in intraday shape, which needs hourly prices (CAISO OASIS). The apparent 'flattening' in T01 was mostly the 2022-23 gas distortion."]],
+       ["Why it matters", "Batteries shift energy from noon to evening, both inside the HE7-22 block, so the block average barely moves. Their effect lives in intraday shape, which needs hourly prices. Part 8 (thesis E2) runs exactly that test with ERCOT's hourly prices. The apparent 'flattening' in T01 was mostly the 2022-23 gas distortion."]],
       [1.0, 5.5], header=False)
 fig(REP / "T01b_sp15_batteries" / "solar_effect_vs_batteries.png", "T01b: if batteries explained the per-year slopes (orange), they would follow the blue line. They scatter around it instead.", 5.6)
 H2("T02: The Mid-C vs SP15 spread is a hydro story")
@@ -659,15 +663,94 @@ P("Interpretation (a hypothesis, not yet tested): eastern prices follow gas and 
 story.append(PageBreak())
 
 # =====================================================================================
+# 8. ERCOT
+# =====================================================================================
+H1("8. ERCOT: working with hourly data")
+P("ERCOT runs the Texas grid, the fastest-changing power market in the U.S.: solar and batteries are being added faster there than "
+  "anywhere else. This part extends the project to ERCOT. It needed a new data source, and because that source is <b>hourly</b>, it "
+  "opens up questions the daily EIA prices can't answer.")
+H2("8.1 A second data source")
+P("EIA's price files stopped carrying ERCOT after 2018. ERCOT publishes its own market data, and one public report, <i>Historical DAM "
+  "Load Zone and Hub Prices</i> (report NP4-180-ER), has every hourly day-ahead price at every trading hub back to 2010. No account or key is needed.")
+B("<b>Finding the files:</b> the report page lists one zip per year, each with a numeric document ID. <font face='Mono'>ercot._yearly_doc_ids()</font> "
+  "reads that page and pulls out the IDs with a regular expression, so the code finds new years automatically instead of hard-coding links.",
+  "<b>Inside each zip:</b> one Excel workbook with a sheet per month and one row per hour per settlement point. The project keeps the six trading "
+  "hubs (North, Houston, South, West, Panhandle, and the hub average) and uses <b>HB_HUBAVG</b>, the average of the four main hubs, as ERCOT's headline price.",
+  "<b>Caching:</b> each year is parsed once and saved as Parquet. Only the current year is re-downloaded, because it's still growing.",
+  "<b>Grid data:</b> still EIA-930 (balancing authority ERCO), now pulled <i>hourly</i>: demand, solar, wind, gas generation, and the 'Other' and 'Battery' categories.")
+WATCH(["Data arrives messier than you expect. Two problems showed up here: in some years ERCOT's price column loaded as text, not numbers, and Henry "
+       "Hub's gas column did the same. Both quietly broke the math until they were converted with <font face='Mono'>pd.to_numeric</font>. "
+       "Check column types (<font face='Mono'>df.dtypes</font>) every time you load a new source."])
+H2("8.2 Lining up hourly data")
+P("With daily data, matching two sources only means matching dates. With hourly data, you also have to agree on what an 'hour' is, and on what time zone it is in.")
+B("<b>Hour ending:</b> ERCOT labels hours by when they <i>end</i>. 'HE20' is 7pm to 8pm. HE1 is midnight to 1am, and there is no HE0.",
+  "<b>Time zones:</b> EIA-930's hourly data is in UTC, also labeled by the end of the hour. The code steps each EIA timestamp back one hour (to the start "
+  "of the hour), converts UTC to US Central, and then the local date and the start hour + 1 give ERCOT's delivery date and hour ending.",
+  "<b>Daylight saving time:</b> on the November fall-back day, 1am happens twice, so ERCOT lists that hour twice with a 'repeated hour' flag. The code "
+  "drops the repeat so every day has at most 24 hours. Days with fewer than 23 matched hours are skipped.")
+KEY(["Always run a <b>sanity check</b> after an alignment step. Here: Texas solar output should peak in the early afternoon. After conversion, average solar "
+     "peaked at HE13 to HE15 every year, which is exactly right. If the time-zone logic had been off by an hour or more, the solar peak would have landed in the wrong place."])
+H2("8.3 New ideas used in the ERCOT theses")
+table([
+    ["Idea", "What it means", "Where it's used"],
+    ["Net-load ramp", "How much net load climbs from its midday low (HE9-16) to its evening high (HE17-23), in GW. The steeper the ramp, the more flexible supply the grid needs right after sunset.", "E2"],
+    ["Evening premium", "Average HE19-22 price minus average HE10-15 price, divided by gas: how much more evening power costs than midday power, in heat-rate units.", "E2"],
+    ["Excluding an extreme event", "Winter Storm Uri (Feb 10-20, 2021) pinned prices at the $9,000 cap for days. That's a different physical regime, so those days are dropped, not just winsorized.", "E1, E2"],
+    ["Log of spikes", "Price spikes are multiplicative (a bad day can be 5x a normal one), so E1 models log(max price / gas). A 0.1 change in the log is about a 10% change.", "E1"],
+    ["Standardized coefficients", "scale(x) rescales a variable to mean 0, standard deviation 1. Two drivers in different units (or two very similar ones) can then be compared head to head: the bigger coefficient matters more.", "E1"],
+    ["Comparing R²", "Fit two one-driver models on the same data. The driver whose model explains more of the variation is the better single explanation.", "E1"],
+    ["Testing a difference", "To ask whether driver A gained on driver B, test whether coefA - coefB = 0 (statsmodels t_test). Two separate p-values can't answer that.", "E1"],
+    ["A seam in the data", "When a source changes how it reports something (EIA started a separate battery series in Nov 2024), build the measure from the part that's visible on both sides, and check the chart for a jump at the seam.", "E2"],
+], [1.35, 4.15, 1.0])
+
+H2("8.4 E1: ERCOT scarcity moved from the demand peak to the net-load peak")
+table([["Question", "Is the most expensive hour of the day now set by net load (after sunset) rather than by demand (late afternoon)?"],
+       ["Method", "Average price and net-load shapes by hour and year; the share of days whose price peak falls within an hour of each peak; a per-year 'horse race' with both peaks in one model (standardized); a pooled test of whether net load gained on demand over time"],
+       ["Result", "The price peak moved from HE17 to HE20 in 2023. Days priced within an hour of the demand peak fell from 74% (2019) to 13% (2026), while 85-89% now sit near the net-load peak. Net load's R² advantage over demand grew from +0.15 (2019-21) to +0.26 (2023+). Gap test: +0.087 per year, p = 0.004."],
+       ["Twist", "Net load's own effect didn't grow (+0.015 per year, p = 0.37). It was already the stronger driver in 2019, because wind made net load differ from demand even before solar. What changed is that demand alone <b>lost</b> its explanatory power (-0.072 per year, p &lt; 0.001)."],
+       ["Limits", "Day-ahead prices only; real-time scarcity is spikier. EIA net load excludes rooftop solar."]],
+      [1.0, 5.5], header=False)
+fig(REP / "E1_ercot_netload_peak" / "daily_shapes.png", "E1: in 2019 the price spike sat at HE17 with the demand peak. By 2026 it sits at HE20-21, where net load now peaks. The midday dip in net load is solar.", 6.5)
+fig(REP / "E1_ercot_netload_peak" / "peak_timing.png", "E1: the share of days whose price peak lines up with the demand peak collapsed after 2022.", 5.2)
+
+H2("8.5 E2: batteries are flattening the evening premium")
+P("This is the test T01b couldn't run. T01b concluded that batteries change the <i>shape</i> of the day, which a daily block price can't show. ERCOT's hourly "
+  "prices make the shape visible, so the question can be asked directly.")
+table([["Question", "Does a bigger battery fleet make each GW of evening ramp cost less?"],
+       ["Method", "Evening premium regressed on ramp, battery fleet, and ramp x battery, with controls for net-load peak, wind, month and weekday (HAC s.e.). Checked against a ramp x time trend, without 2022's gas spike, and on 2023+ only. Per-year ramp slopes plotted against the fleet, the same picture as T01b."],
+       ["Battery measure", "Same idea as CAISO: recover storage from EIA-930. Before Nov 2024 ERCOT batteries appear only as evening discharge inside 'Other'; after, as their own series. Evening discharge is visible in both, so the proxy uses that: trailing 90-day 95th percentile, lagged a day. Grows from about 0.03 GW (2019) to 8.7 GW (2026), with no jump at the seam."],
+       ["Result", "Ramp x battery is negative and significant in every version (main: -0.042, p = 0.003; 2023+: -0.112, p &lt; 0.001). Per GW of ramp, the premium fell from +2.21 (2023) to +0.13 (2026) while the ramp itself grew from 15 to 27 GW."],
+       ["Caution", "Before 2023 the ramp didn't drive the evening premium at all, because scarcity still sat at 5pm (E1). So the evidence comes from four years of one build-out. Adding a time trend flips the plain ramp coefficient negative, a sign that battery growth and time are too intertwined to split cleanly."]],
+      [1.0, 5.5], header=False)
+fig(REP / "E2_ercot_batteries" / "premium_vs_fleet.png", "E2: the evening ramp (dashed) keeps growing, but the premium (red) peaked in 2024 as the battery fleet (bars) took off.", 5.8)
+fig(REP / "E2_ercot_batteries" / "ramp_effect_vs_batteries.png", "E2: per-year cost of each GW of ramp. 2019-22 sit near zero (scarcity wasn't in the evening yet); from 2023 on, the cost falls as the fleet grows.", 5.8)
+
+H2("8.6 How the pieces connect")
+B("<b>T01 (CAISO):</b> solar pushes daily prices down relative to gas.",
+  "<b>T01b (CAISO):</b> batteries don't show up in the daily price, probably because they reshuffle value <i>within</i> the day.",
+  "<b>E1 (ERCOT):</b> with hourly data you can see where scarcity went: from the afternoon to the evening net-load peak.",
+  "<b>E2 (ERCOT):</b> and batteries are now competing away that evening scarcity, the intraday effect T01b predicted but couldn't measure.")
+P("That chain is the point of a thesis-driven project: each result, including the negative one, sets up the next question.")
+YOU(["Why ERCOT needed a different data source, and how the code finds ERCOT's yearly files.",
+     "What 'hour ending' means, and the three steps that line EIA's UTC hours up with ERCOT's local hours.",
+     "How the solar-peak check catches a time-zone bug.",
+     "Why E1 tests the <i>difference</i> between two coefficients instead of each one alone.",
+     "How the battery measure bridges EIA's change in reporting.",
+     "Why E2's evidence really comes from 2023 onward, and what the flipped ramp coefficient warns you about."])
+story.append(PageBreak())
+
+# =====================================================================================
 # 8. LESSONS
 # =====================================================================================
-H1("8. Research lessons: three times the first answer was wrong")
+H1("9. Research lessons: five times the first answer was wrong")
 P("These are worth knowing cold. They show the difference between running models and doing research. Each is a mistake that is easy to make and easy to miss.")
 table([
     ["#", "First result", "What was wrong", "Fix", "Lesson"],
     ["1", "LightGBM lost to 'tomorrow = today' at SP15", "Trees can't predict outside their training range; 2022 prices were unseen", "Model the daily change, not the level", "Check whether your model class can represent the regime you're testing on"],
     ["2", "'Solar's effect is flattening, probably batteries'", "The steep 2022-23 slopes came from the gas-basis distortion, and batteries didn't explain the rest", "Ran T01b properly; reported 'not supported'", "A pattern in noisy yearly estimates isn't a trend. Test the explanation; report negatives"],
     ["3", "Spike-day AUC 0.88", "Cheap 2024 gas made 44% of days 'spikes', and heat waves are persistent", "Relative spike label; yesterday-only baseline", "Inspect your label's base rate by year; always compare to the dumbest reasonable model"],
+    ["4", "E1: 'net load's effect isn't growing' (p = 0.37)", "The test asked the wrong question. The thesis is about net load gaining <i>relative to</i> demand", "Test the difference of the two trend terms: +0.087/yr, p = 0.004", "Make the statistical test match the claim. Then report what actually moved (demand lost relevance)"],
+    ["5", "E2: one straight line across 2019-2026", "Before 2023 the ramp didn't set evening prices at all, so pooling mixed two regimes", "Per-year slopes, a 2023+ model, and an explicit caution in the verdict", "Plot the per-period estimates before trusting one pooled number"],
 ], [0.25, 1.35, 1.75, 1.35, 1.8])
 H2("The general workflow")
 B("State the thesis as something that could turn out false, with a predicted sign.",
@@ -681,7 +764,7 @@ story.append(PageBreak())
 # =====================================================================================
 # 9. CODE MAP
 # =====================================================================================
-H1("9. Code map")
+H1("10. Code map")
 table([
     ["File", "What it does", "Concepts"],
     ["powerml/config.py", "Paths, hub definitions, hub-to-BA map, fuel codes", "Hubs, BAs"],
@@ -694,6 +777,9 @@ table([
     ["scripts/thesis_01b_*.py", "Batteries", "Interactions, delta method, confounding, reverse causality"],
     ["scripts/thesis_02_*.py", "Mid-C hydro spread", "Climatology, anomalies, spreads, walk-forward ridge"],
     ["scripts/thesis_03_*.py", "PJM convexity and spikes", "Quantile regression, classification, AUC, Brier"],
+    ["powerml/ercot.py", "ERCOT hourly hub prices from ERCOT's site; hourly EIA-930 for ERCO; battery proxy; daily ERCOT panel", "Scraping a report index, hour-ending alignment, time zones, DST"],
+    ["scripts/thesis_e1_*.py", "ERCOT peak-hour shift", "Daily shapes, standardized coefficients, R² comparison, difference test"],
+    ["scripts/thesis_e2_*.py", "ERCOT batteries and the evening premium", "Interactions, delta method, regime change, collinearity"],
     ["tests/test_pipeline.py", "Two leakage guards on synthetic data", "Testing for leakage"],
 ], [1.75, 2.85, 1.9])
 H2("Running it")
@@ -710,7 +796,7 @@ story.append(PageBreak())
 # =====================================================================================
 # 10. INTERVIEW PREP
 # =====================================================================================
-H1("10. Review questions")
+H1("11. Review questions")
 P("Try to answer each question before reading the answer. They mix concepts from every part of the guide.")
 qa = [
     ("Summarize the project in three sentences.",
@@ -740,6 +826,12 @@ qa = [
     ("Why did the simple ridge model win in the East?",
      "PJM and New England prices are largely gas plus load, which is close to linear in heat-rate terms, so a regularized linear model captures most of it with "
      "less variance than trees."),
+    ("Why is ERCOT a better place than CAISO to test the battery idea?",
+     "ERCOT publishes hourly prices, so the midday-to-evening shape is visible. CAISO's EIA prices are one daily on-peak block, and batteries "
+     "mostly move energy within that block, so their effect averages out."),
+    ("In E1, why test the difference between two trend terms?",
+     "The claim is that net load gained on demand as the price driver. Each trend term alone answers a different question. The difference "
+     "was significant (+0.087 per year, p = 0.004), and it turned out to come from demand losing relevance rather than net load gaining."),
     ("What's the difference between AUC and precision in the top 10%?",
      "AUC measures ranking across all thresholds. Precision in the top 10% is what you'd get acting only on the model's strongest warnings: 66% against an 11% base rate."),
 ]
@@ -750,7 +842,7 @@ story.append(PageBreak())
 # =====================================================================================
 # 11. GLOSSARY + STUDY PLAN
 # =====================================================================================
-H1("11. Glossary")
+H1("12. Glossary")
 gl = [
     ("AUC", "Probability a random positive case is ranked above a random negative one"),
     ("Balancing authority (BA)", "Entity that balances supply and demand in an area; EIA-930 reports by BA"),
@@ -778,8 +870,14 @@ gl = [
     ("Spark spread", "Power price minus (plant heat rate x gas price)"),
     ("Walk-forward", "Train on the past, test on the next period, roll forward"),
     ("Winsorize", "Cap extreme values at a chosen percentile"),
+    ("Collinearity", "Two regressors moving almost together, so a model can't split credit between them"),
+    ("Evening premium", "Evening (HE19-22) price minus midday (HE10-15) price, divided by gas"),
+    ("Hour ending (HE)", "Hours labeled by when they end: HE20 is 7pm-8pm"),
+    ("Net-load ramp", "Rise in net load from its midday low to its evening high, in GW"),
+    ("Standardized coefficient", "Effect of a 1-standard-deviation change, so different drivers can be compared"),
+    ("Winter Storm Uri", "Feb 2021 Texas freeze; prices sat at the $9,000 cap for days"),
 ]
-table([["Term", "Meaning"]] + [list(g) for g in gl], [1.8, 4.7])
+table([["Term", "Meaning"]] + sorted([list(g) for g in gl], key=lambda r: r[0].lower()), [1.8, 4.7])
 story.append(PageBreak())
 H1("Study plan: what to learn next")
 table([
@@ -792,7 +890,7 @@ table([
     ["Options on power", "The T03 trade expression", "Hull, 'Options, Futures, and Other Derivatives': options basics and volatility"],
 ], [1.7, 1.7, 3.1])
 P("Suggested exercises, in order: (1) recompute one number from a report by hand in a notebook; (2) rerun T01 excluding 2022-23 and see what changes; "
-  "(3) recalibrate the P10-P90 bands so coverage reaches 80%; (4) pull CAISO OASIS hourly prices and test batteries on the midday-to-evening spread.")
+  "(3) recalibrate the P10-P90 bands so coverage reaches 80%; (4) rerun E2 on ERCOT real-time prices instead of day-ahead; (5) pull CAISO OASIS hourly prices and see whether E2's result holds in California.")
 
 doc = SimpleDocTemplate(str(OUT), pagesize=letter, leftMargin=0.9 * inch, rightMargin=0.9 * inch,
                         topMargin=0.8 * inch, bottomMargin=0.85 * inch,
