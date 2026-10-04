@@ -8,6 +8,12 @@ The core move is to model the **implied market heat rate** (on-peak power price 
 MMBtu/MWh) instead of raw $/MWh. That strips out the gas level, which otherwise dominates every
 power regression, and isolates what the grid itself is doing: solar, wind, hydro, load.
 
+**New to power markets or to the methods here?** Start with the
+[learning guide (PDF)](docs/Power_Market_ML_Learning_Guide.pdf). It teaches every concept used in the repo
+(supply stacks, heat rates, look-ahead bias, HAC errors, quantile regression, walk-forward backtests and more),
+ties each one to the code and the results, and ends with review questions. Rebuild it with
+`python docs/build_guide.py` (needs `reportlab`).
+
 ## Data (all EIA, all free)
 
 | Source | What | Granularity |
