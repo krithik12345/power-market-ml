@@ -121,3 +121,7 @@ pytest -q
   western and New England winters and isn't in EIA's free daily data.
 - ERCOT North dropped out of EIA's ICE files after 2018, so ERCOT prices come from ERCOT directly. They're
   day-ahead only; real-time prices and ancillary services, where batteries also earn, aren't modeled.
+
+## Disclaimer
+
+The hypotheses in this project, along with the sourcing and collection of all ERCOT and EIA data, are my own. I used Claude (Anthropic) as an assistant to implement and run the machine learning and regression analyses used to test those hypotheses, along with helping format and write documentation for organizational purposes. All conclusions drawn from the results reflect my own interpretation.
