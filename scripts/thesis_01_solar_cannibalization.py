@@ -28,8 +28,11 @@ SPRING = [3, 4, 5]
 
 df = build_panel("SP15").dropna(subset=["ihr", "solar_share", "demand_gw"])
 df = df[df["year"] >= 2019]
+# Winsorize: cap the most extreme 1% at each end instead of deleting them. Regressions minimize
+# SQUARED errors, so a few absurd days (Henry Hub understated western gas in Dec-2022) would
+# otherwise dominate the fit.
 lo, hi = df["ihr"].quantile([0.01, 0.99])
-df["ihr_w"] = df["ihr"].clip(lo, hi)  # Henry Hub understates western gas in crises (e.g. Dec-2022)
+df["ihr_w"] = df["ihr"].clip(lo, hi)
 
 # ---------------------------------------------------------------- 1. the stylized fact
 by_year = df.groupby("year").agg(
@@ -67,10 +70,21 @@ fig.tight_layout(); fig.savefig(OUT / "ihr_heatmap.png", dpi=150); plt.close(fig
 # Shares are in percentage points so coefficients read "MMBtu/MWh per +1pp of share".
 reg = df.assign(solar_pp=df["solar_share"] * 100, wind_pp=df["wind_share"] * 100,
                 hydro_pp=df["hydro_share"] * 100)
+# Reading the formula (statsmodels uses R-style formulas):
+#   ihr_w ~ ...            : explain the heat rate with what's to the right of ~
+#   solar_pp + wind_pp ... : CONTROLS. The solar coefficient is solar's effect holding these fixed.
+#   C(month) + C(dow)      : FIXED EFFECTS. C() means "category": a separate intercept per month and
+#                            weekday, so solar is compared to what's normal for that month and weekday.
+# cov_type="HAC": standard errors that allow errors to be correlated across ~5 days in a row
+# (heat waves and gas squeezes persist). Ordinary errors would overstate certainty.
 base = smf.ols("ihr_w ~ solar_pp + wind_pp + hydro_pp + demand_gw + C(month) + C(dow)", reg) \
     .fit(cov_type="HAC", cov_kwds={"maxlags": 5})
+# INTERACTION "solar_pp:C(year)": one solar coefficient PER YEAR instead of one overall. If the
+# per-year slopes trend up or down, solar's effect is changing over time.
 by_yr = smf.ols("ihr_w ~ solar_pp:C(year) + C(year) + wind_pp + hydro_pp + demand_gw + C(month) + C(dow)", reg) \
     .fit(cov_type="HAC", cov_kwds={"maxlags": 5})
+# Pull the per-year solar coefficients out of the fitted model. Their names look like
+# "solar_pp:C(year)[2024]", so the year is the text between the square brackets.
 slopes = pd.DataFrame({
     "year": [int(k.split("[")[1].rstrip("]")) for k in by_yr.params.index if k.startswith("solar_pp:")],
     "coef": [v for k, v in by_yr.params.items() if k.startswith("solar_pp:")],
@@ -78,6 +92,7 @@ slopes = pd.DataFrame({
 })
 
 fig, ax = plt.subplots(figsize=(7, 4))
+# Error bars = 95% confidence interval = coefficient +/- 1.96 standard errors.
 ax.errorbar(slopes["year"], slopes["coef"] * 10, yerr=1.96 * slopes["se"] * 10, fmt="o", capsize=4)
 ax.axhline(0, color="grey", lw=0.8)
 ax.set_ylabel("Δ IHR per +10pp solar share"); ax.set_title("Solar's marginal effect on SP15 heat rate, by year (95% CI)")
@@ -85,6 +100,9 @@ fig.tight_layout(); fig.savefig(OUT / "solar_slope_by_year.png", dpi=150); plt.c
 
 # ---------------------------------------------------------------- 3. nonlinear check (GBM)
 feats = ["solar_share", "wind_share", "hydro_share", "demand_gw", "doy_sin", "doy_cos", "dow", "trend_yrs"]
+# The regression assumes a straight-line solar effect. A tree model doesn't, so fit one and ask
+# it: "holding everything else at its actual values, how does predicted heat rate change as solar
+# share moves from low to high?" That's PARTIAL DEPENDENCE. A curve that bends = nonlinear effect.
 gbm = GBM(feats).fit(df, df["ihr_w"])
 pd_res = partial_dependence(gbm.model, df[feats], ["solar_share"], grid_resolution=30)
 grid, curve = pd_res["grid_values"][0], pd_res["average"][0]

@@ -27,6 +27,11 @@ HUBS = ("HB_NORTH", "HB_HOUSTON", "HB_SOUTH", "HB_WEST", "HB_PAN", "HB_HUBAVG")
 
 
 def _yearly_doc_ids() -> dict[int, str]:
+    """Map each year to the document ID of its price file, read from ERCOT's report page.
+
+    ERCOT links files by numeric ID, not by name, and the IDs change every year. Reading the
+    listing page with a regular expression means new years are picked up automatically.
+    """
     html = requests.get(LIST_URL, headers=HEADERS, timeout=60).text
     ids = {}
     for name, doc in re.findall(r"DAMLZHBSPP_(\d{4})\.zip.*?doclookupId=(\d+)", html, flags=re.S):
@@ -38,6 +43,8 @@ def _yearly_doc_ids() -> dict[int, str]:
 
 
 def _parse_year(content: bytes) -> pd.DataFrame:
+    # Open the zip in memory (no temp file), then read every monthly sheet of the workbook
+    # inside it. sheet_name=None returns {sheet name: table}; concat stacks Jan-Dec together.
     z = zipfile.ZipFile(io.BytesIO(content))
     sheets = pd.read_excel(z.open(z.namelist()[0]), sheet_name=None)
     df = pd.concat(sheets.values(), ignore_index=True)
@@ -54,6 +61,8 @@ def dam_hub_prices(first_year: int = 2019, refresh: bool = False) -> pd.DataFram
     frames, ids = [], None
     for year in range(first_year, date.today().year + 1):
         path = CACHE / f"ercot_dam_{year}.parquet"
+        # Past years never change, so read them from the cache. The current year is still
+        # growing, so it is re-downloaded on every run.
         current = year == date.today().year
         if path.exists() and not (refresh or current):
             frames.append(pd.read_parquet(path))
@@ -96,6 +105,8 @@ def hourly_fundamentals(refresh: bool = False) -> pd.DataFrame:
     # local date plus (start hour + 1) is ERCOT's delivery date and hour ending.
     start = (d["period"] - pd.Timedelta("1h")).dt.tz_localize("UTC").dt.tz_convert("US/Central").dt.tz_localize(None)
     d = d.assign(date=start.dt.normalize(), he=start.dt.hour + 1)
+    # Sanity check used when this was built: average solar should peak around HE13-15 in Texas.
+    # It does, which confirms the time-zone shift above is right.
     wide = d.pivot_table(index=["date", "he"], columns="series", values="value", aggfunc="mean").reset_index()
     wide = wide.rename(columns={"D": "demand", "SUN": "solar", "WND": "wind", "NG": "gas_gen",
                                 "OTH": "other", "BAT": "battery"})
@@ -121,9 +132,13 @@ def battery_fleet(f: pd.DataFrame) -> pd.DataFrame:
     shifted a day so it measures fleet capability rather than reacting to today's prices.
     """
     s = f.assign(stor=f["other"].fillna(0) + f["battery"].fillna(0))
+    # 'Other' also holds small non-storage plants that run around the clock. Their level is
+    # estimated from the overnight hours (HE1-5) and subtracted, leaving the storage swing.
     base = s[s["he"].between(1, 5)].groupby("date")["stor"].median().clip(lower=0)
     peak = s[s["he"].isin(range(17, 24))].groupby("date")["stor"].max()
     out = pd.DataFrame({"batt_peak_gw": (peak - base).clip(lower=0) / 1000})
+    # Daily discharge goes up and down with prices; the fleet's capability only grows. A high
+    # percentile over the past 90 days tracks capability, and shift(1) keeps today's prices out.
     out["batt_fleet_gw"] = out["batt_peak_gw"].shift(1).rolling(90, min_periods=30).quantile(0.95)
     return out.reset_index()
 
@@ -135,11 +150,17 @@ def daily_panel(hub: str = "HB_HUBAVG", gas: pd.DataFrame | None = None) -> pd.D
     p = dam_hub_prices()
     p = p[p["point"] == hub]
     f = hourly_fundamentals()
+    # Hourly prices + hourly grid data, matched on (date, hour ending). An inner join keeps
+    # only hours present in both sources.
     h = p.merge(f, on=["date", "he"], how="inner")
 
     def at_max(g, col):
+        """Hour ending at which `col` is highest that day (idxmax finds the row of the max)."""
         return g.loc[g[col].idxmax(), "he"]
 
+    # Collapse 24 hourly rows into one row per day. Each entry below is one daily summary,
+    # e.g. "price_eve" = average price over the evening hours, "he_price_max" = the hour
+    # the price peaked.
     g = h.groupby("date")
     day = pd.DataFrame({
         "price_mean": g["price"].mean(),
@@ -158,6 +179,8 @@ def daily_panel(hub: str = "HB_HUBAVG", gas: pd.DataFrame | None = None) -> pd.D
         "hours": g.size(),
     }).reset_index()
     day = day[day["hours"] >= 23]                                    # skip days with missing hours
+    # Net-load ramp: how far net load climbs from its midday low (solar at full output) to its
+    # evening high (sun down). This is what the grid must cover after sunset, and what E2 uses.
     day["ramp_gw"] = day["netload_eve_max_gw"] - day["netload_mid_min_gw"]
     day = day.merge(battery_fleet(f), on="date", how="left")
 

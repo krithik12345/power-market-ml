@@ -5,6 +5,11 @@
 3. EIA-930 daily demand, demand forecast, and net generation by fuel (EIA API v2).
 
 Every loader caches to data/raw or data/cache so re-runs are offline and cheap.
+
+How to read this file: start with ice_power_prices() and henry_hub() (plain file downloads),
+then eia_api() (the one function that talks to EIA's API), then eia930_daily() and
+fundamentals(), which turn API rows into one tidy table per hub. caiso_storage() at the bottom
+is the trick used in thesis T01b to find batteries that EIA doesn't label.
 """
 from __future__ import annotations
 
@@ -27,10 +32,14 @@ load_dotenv()  # picks up EIA_API_KEY from a local .env
 
 
 def _download(url: str, dest, force: bool = False):
+    # Caching: if we already have the file, use it. Only re-download when forced (e.g. the
+    # current year's file, which EIA keeps appending to).
     if dest.exists() and not force:
         return dest
     r = requests.get(url, timeout=120)
     r.raise_for_status()
+    # A missing file on eia.gov returns a normal web page (status 200) instead of an error,
+    # so check the first bytes: a real spreadsheet never starts with "<!doctype html".
     if r.content[:15].lower().startswith(b"<!doctype html"):
         raise RuntimeError(f"{url} returned an HTML page, not a data file")
     dest.write_bytes(r.content)
@@ -70,8 +79,12 @@ def ice_power_prices(first_year: int = ICE_FIRST_YEAR, last_year: int | None = N
     for c in ("trade_date", "delivery_start", "delivery_end"):
         df[c] = pd.to_datetime(df[c])
 
+    # Translate ICE's long hub names ("SP15 EZ Gen DA LMP Peak") to short keys ("SP15").
+    # Hubs we don't model map to NaN and are dropped on the next line.
     name_to_key = {h.ice_name: k for k, h in HUBS.items()}
     df["hub"] = df["ice_name"].map(name_to_key)
+    # Keep single-day products only. A Friday trade covering Sat-Mon is one price for three
+    # days, which can't be matched to one day of grid data.
     df = df[df["hub"].notna() & (df["delivery_start"] == df["delivery_end"])]
     df = df.rename(columns={"delivery_start": "date"})
     cols = ["hub", "date", "trade_date", "price", "high", "low", "volume_mwh", "n_trades"]
@@ -82,9 +95,11 @@ def ice_power_prices(first_year: int = ICE_FIRST_YEAR, last_year: int | None = N
 def henry_hub() -> pd.DataFrame:
     """Henry Hub spot $/MMBtu indexed by trade date."""
     path = _download(HENRY_HUB_URL, RAW / "RNGWHHDd.xls", force=_stale(RAW / "RNGWHHDd.xls"))
-    df = pd.read_excel(path, sheet_name="Data 1", skiprows=2)
+    df = pd.read_excel(path, sheet_name="Data 1", skiprows=2)   # first 2 rows are titles
     df.columns = ["trade_date", "gas"]
     df["trade_date"] = pd.to_datetime(df["trade_date"])
+    # Excel sometimes hands numbers back as text; force them to floats so math works.
+    # errors="coerce" turns anything unparseable into NaN, which dropna() then removes.
     df["gas"] = pd.to_numeric(df["gas"], errors="coerce")
     return df.dropna().reset_index(drop=True)
 
@@ -121,14 +136,20 @@ def eia_api(route: str, facets: dict, start: str, end: str, frequency: str = "da
         "sort[0][direction]": "asc",
         "length": PAGE,
     }
+    # Facets are filters, e.g. {"respondent": ["CISO"], "fueltype": ["SUN", "WND"]}
+    # becomes facets[respondent][]=CISO&facets[fueltype][]=SUN&facets[fueltype][]=WND.
     for name, values in facets.items():
         params[f"facets[{name}][]"] = list(values)
 
+    # Pagination: EIA returns at most 5,000 rows per request, so keep asking for the next
+    # 5,000 (offset 0, 5000, 10000, ...) until we've collected the 'total' it reports.
     rows, offset = [], 0
     while True:
         params["offset"] = offset
         for attempt in range(4):
             r = requests.get(f"{API_BASE}/{route}/data/", params=params, timeout=120)
+            # 429 = "too many requests", 5xx = server hiccup. Both are usually temporary, so
+            # wait and retry with exponential backoff: 5s, 10s, 20s, 40s.
             if r.status_code == 429 or r.status_code >= 500:
                 time.sleep(5 * 2 ** attempt)
                 continue
@@ -168,6 +189,8 @@ def eia930_daily(ba: str, timezone: str, end: str | None = None, refresh: bool =
                    {"respondent": [ba], "fueltype": FUELS, "timezone": [timezone]},
                    EIA930_FIRST_DAY, end)
 
+    # The API returns "long" data (one row per date per series). pivot_table reshapes it to
+    # "wide" data: one row per date, one column per series (demand, demand_fcst, gen_sun, ...).
     region_w = region.pivot_table(index="period", columns="type", values="value", aggfunc="sum")
     region_w = region_w.rename(columns={"D": "demand", "DF": "demand_fcst"})
     fuel_w = fuel.pivot_table(index="period", columns="fueltype", values="value", aggfunc="sum")
@@ -181,6 +204,9 @@ def eia930_daily(ba: str, timezone: str, end: str | None = None, refresh: bool =
 def fundamentals(hub_key: str, refresh: bool = False) -> pd.DataFrame:
     """EIA-930 daily fundamentals for a hub, summing across its balancing authorities."""
     hub = HUBS[hub_key]
+    # Most hubs map to one balancing authority; Palo Verde maps to two (APS + SRP), so
+    # stack their tables and add them up day by day. min_count=1 keeps a day as NaN
+    # (missing) rather than 0 when no BA reported it.
     parts = [eia930_daily(ba, hub.timezone, refresh=refresh) for ba in hub.bas]
     return pd.concat(parts).groupby("date", as_index=False).sum(min_count=1)
 
@@ -205,8 +231,11 @@ def caiso_storage(refresh: bool = False) -> pd.DataFrame:
     midday (charging on solar) and positive in the evening (discharging into the ramp).
     """
     h = eia930_hourly("CISO", ["OTH"], refresh=refresh)
+    # EIA hourly data is in UTC. Convert to California time before grouping by day, or the
+    # 8pm discharge (04:00 UTC the next day) would be counted on the wrong date.
     local = h["period"].dt.tz_localize("UTC").dt.tz_convert("US/Pacific")
     h = h.assign(date=local.dt.tz_localize(None).dt.normalize())
+    # Positive hours = discharging (selling power); negative hours = charging (buying power).
     daily = h.groupby("date")["value"].agg(
         batt_discharge_gwh=lambda v: v.clip(lower=0).sum() / 1000,
         batt_charge_gwh=lambda v: -v.clip(upper=0).sum() / 1000,

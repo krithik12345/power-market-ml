@@ -22,8 +22,14 @@ ap.add_argument("--hub", default="SP15", choices=list(HUBS))
 ap.add_argument("--first-test-year", type=int, default=2022)
 args = ap.parse_args()
 
+# Only KNOWN features (available on the trade date) + calendar terms. Never the EXPLAIN set.
 feats = KNOWN + CALENDAR
 df = build_panel(args.hub)
+# Each entry is a recipe that builds a fresh model ("lambda:" delays construction until
+# walk_forward needs it). Compare:
+#   lightgbm_level: predicts the price itself, which fails when prices leave the training range;
+#   lightgbm:       the same model wrapped to predict the CHANGE from yesterday (OnPersistence);
+#   lgbm_p10/p90:   quantile versions giving a low and a high band around the forecast.
 models = {
     "persistence": Persistence,
     "ridge_heat_rate": lambda: HeatRateRidge(feats),
@@ -36,6 +42,8 @@ bt = walk_forward(df, models, feats, first_test_year=args.first_test_year)
 
 point = bt.preds.drop(columns=["lgbm_p10", "lgbm_p90"])
 scores = Backtest(point).scores()
+# Coverage: share of days the actual price landed inside the P10-P90 band. An honest band
+# should catch about 80%; less means the model is overconfident.
 coverage = ((bt.preds["y"] >= bt.preds["lgbm_p10"]) & (bt.preds["y"] <= bt.preds["lgbm_p90"])).mean()
 model_cols = [c for c in point.columns if c not in ("date", "year", "y", "price_lag")]
 by_year = point[model_cols].sub(point["y"], axis=0).abs().groupby(point["year"]).mean()

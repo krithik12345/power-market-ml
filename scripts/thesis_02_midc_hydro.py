@@ -39,6 +39,9 @@ bpa = bpa.assign(
     month=bpa["date"].dt.month,
 )
 # Hydro anomaly = today's hydro minus the average for that calendar month across all years.
+# Why not raw hydro? Everyone knows May is wet; the market already prices that in. What moves
+# prices is SURPRISE: more or less water than normal for the month.
+# transform("mean") returns each row's month average, lined up with the original rows.
 # Fine for the structural test; the forecast test below rebuilds it from past years only.
 bpa["hydro_anom_gw"] = bpa["hydro_gw"] - bpa.groupby("month")["hydro_gw"].transform("mean")
 
@@ -47,6 +50,8 @@ sp = build_panel("SP15")[["date", "price", "solar_share", "demand_gw"]].rename(
     columns={"price": "sp15", "solar_share": "ciso_solar", "demand_gw": "ciso_load_gw"})
 df = (mid.rename(columns={"price": "midc"}).merge(sp, on="date")
       .merge(bpa[["date", "hydro_gw", "hydro_anom_gw", "bpa_wind_gw", "bpa_load_gw"]], on="date"))
+# A spread (Mid-C minus SP15) cancels what the two hubs share, like western gas prices,
+# and leaves what differs between them, like Northwest hydro.
 df["spread"] = df["midc"] - df["sp15"]
 df = df.dropna(subset=["spread", "hydro_gw"]).sort_values("date").reset_index(drop=True)
 lo, hi = df["spread"].quantile([0.01, 0.99])
@@ -64,6 +69,7 @@ ax1.set_xticks(range(1, 13), [pd.Timestamp(2000, m, 1).strftime("%b") for m in r
 ax1.set_title("Mid-C − SP15 on-peak spread by month (2019+)")
 fig.tight_layout(); fig.savefig(OUT / "seasonal_spread.png", dpi=150); plt.close(fig)
 
+# qcut splits days into 5 equal-sized groups (quintiles) by hydro anomaly, driest to wettest.
 df["anom_bin"] = pd.qcut(df["hydro_anom_gw"], 5, labels=["Very dry", "Dry", "Normal", "Wet", "Very wet"])
 by_bin = df.groupby("anom_bin", observed=True).agg(
     spread=("spread_w", "median"), p25=("spread_w", lambda s: s.quantile(.25)),
@@ -97,7 +103,9 @@ for year in sorted(fc["year"].unique()):
     if year < 2022:
         continue
     train, test = fc[fc["year"] < year].copy(), fc[fc["year"] == year].copy()
-    clim = train.groupby("lag_month")["hydro_lag"].mean()          # past-years-only seasonal norm
+    # Rebuild "normal hydro for this month" from TRAINING years only. Using all years would let
+    # the future leak into what counts as normal.
+    clim = train.groupby("lag_month")["hydro_lag"].mean()
     for part in (train, test):
         part["hydro_anom_lag"] = part["hydro_lag"] - part["lag_month"].map(clim)
     feats = ["hydro_anom_lag", "wind_lag", "spread_lag", "gas"]

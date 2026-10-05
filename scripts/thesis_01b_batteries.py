@@ -50,7 +50,11 @@ def fit(data, rhs):
 
 
 def solar_effect(m, b):
-    """Marginal effect of +10pp solar at battery level b (pp), with a delta-method s.e."""
+    """Marginal effect of +10pp solar at battery level b (pp), with a delta-method s.e.
+
+    With an interaction, solar's effect = solar + b * (solar x battery). Its variance combines
+    both coefficients' variances and their covariance: Var(x + b*y) = Var(x) + b²Var(y) + 2b Cov(x, y).
+    """
     V = m.cov_params()
     eff = m.params["solar_pp"] + b * m.params["solar_pp:batt_pp"]
     var = V.loc["solar_pp", "solar_pp"] + b ** 2 * V.loc["solar_pp:batt_pp", "solar_pp:batt_pp"] \
@@ -66,8 +70,12 @@ slopes = pd.DataFrame({
     "se": [v * 10 for k, v in yr.bse.items() if k.startswith("solar_pp:")],
 }).merge(df.groupby("year")["batt_pp"].mean().rename("batt_pp").reset_index(), on="year")
 
+# solar_pp * batt_pp = solar + battery + solar:battery. The thesis predicts the solar:battery
+# term is POSITIVE (more batteries -> solar's negative effect shrinks toward zero).
 m_batt = fit(df, "solar_pp * batt_pp")
-m_race = fit(df, "solar_pp * batt_pp + solar_pp:trend_yrs + trend_yrs")      # battery vs plain time
+# Battery fleet grows steadily with time, so "batteries" could secretly be "anything that changed
+# over time". Giving time its own interaction is the test for that confounding.
+m_race = fit(df, "solar_pp * batt_pp + solar_pp:trend_yrs + trend_yrs")
 clean = df[~df["year"].isin([2022, 2023])]                                     # drop western gas crisis
 m_clean = fit(clean, "solar_pp * batt_pp")
 

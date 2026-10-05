@@ -69,8 +69,13 @@ def fit(data, rhs):
     return smf.ols(f"premium_w ~ {rhs} + {CONTROLS}", data).fit(**HAC)
 
 
+# The key term is ramp x battery ("a * b" = a + b + a:b). If it's NEGATIVE, a bigger battery
+# fleet makes each GW of evening ramp cost less, which is the thesis. The extra models are
+# ROBUSTNESS CHECKS: a result worth believing should survive each of them.
 m_base = fit(day, "ramp_gw + batt_fleet_gw")
 m_int = fit(day, "ramp_gw * batt_fleet_gw")
+# Competing explanation: maybe the ramp just mattered less over time for some other reason.
+# Give "time" its own interaction and see if the battery term still holds.
 m_race = fit(day, "ramp_gw * batt_fleet_gw + ramp_gw:trend_yrs + trend_yrs")
 m_ex22 = fit(day[day["year"] != 2022], "ramp_gw * batt_fleet_gw")           # 2022: gas at $6-9
 m_post = fit(day[day["year"] >= 2023], "ramp_gw * batt_fleet_gw")           # only the battery build-out years
@@ -91,7 +96,12 @@ table = pd.DataFrame([row("No interaction", m_base), row("Ramp x battery", m_int
 
 
 def ramp_effect(m, b):
-    """Premium per extra GW of ramp at battery fleet b (GW), with delta-method s.e."""
+    """Premium per extra GW of ramp at battery fleet b (GW), with delta-method s.e.
+
+    With an interaction, the ramp effect isn't one number: it's ramp + b * (ramp x battery).
+    Its uncertainty needs both coefficients' variances AND their covariance (V), which is the
+    delta method: Var(x + b*y) = Var(x) + b²Var(y) + 2b Cov(x, y).
+    """
     V = m.cov_params()
     eff = m.params["ramp_gw"] + b * m.params[K]
     var = V.loc["ramp_gw", "ramp_gw"] + b ** 2 * V.loc[K, K] + 2 * b * V.loc["ramp_gw", K]

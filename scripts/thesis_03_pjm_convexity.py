@@ -41,6 +41,10 @@ summer = df[df["month"].isin(SUMMER)].copy()
 quantiles = [0.1, 0.5, 0.9]
 grid = pd.DataFrame({"demand_gw": np.linspace(summer["demand_gw"].quantile(.02), summer["demand_gw"].quantile(.99), 60)})
 qfits, qcurves = {}, {}
+# Quantile regression fits a chosen PERCENTILE instead of the average: q=0.9 is the line that
+# about 90% of days fall below, i.e. the "bad day" price at each load level.
+# I(demand_gw**2) adds a squared term so each line can curve. I() tells the formula to do the
+# math literally instead of reading ** as formula syntax.
 for q in quantiles:
     m = smf.quantreg("ihr_w ~ demand_gw + I(demand_gw**2)", summer).fit(q=q, max_iter=10000)
     qfits[q] = m
@@ -48,6 +52,7 @@ for q in quantiles:
 
 # Slope of each quantile at moderate vs high load = convexity, and whether the top quantile steepens faster.
 lo_gw, hi_gw = summer["demand_gw"].quantile([0.25, 0.95])
+# For y = b1*x + b2*x², the slope at load x is the derivative b1 + 2*b2*x.
 slope_at = lambda m, x: m.params["demand_gw"] + 2 * m.params["I(demand_gw ** 2)"] * x
 slopes = pd.DataFrame({
     f"slope at {lo_gw:.0f} GW": {q: slope_at(m, lo_gw) for q, m in qfits.items()},
@@ -75,6 +80,7 @@ top_share = excess[summer["load_decile"] == 10].sum() / excess.sum()
 # Spike = heat rate at least 1.5x its trailing 30-day median. Relative to recent history, so a
 # cheap-gas year (which lifts every day's heat rate) doesn't count as a year of "spikes".
 SPIKE_X = 1.5
+# shift(1) before rolling: the reference uses the past 30 days only, never today itself.
 df["ihr_ref"] = df["ihr"].shift(1).rolling(30, min_periods=15).median()
 df["spike"] = (df["ihr"] > SPIKE_X * df["ihr_ref"]).astype(int)
 df["ihr_lag_rel"] = df["ihr_lag"] / df["ihr_ref"]          # how stretched yesterday already was
@@ -84,17 +90,27 @@ results, preds = [], []
 for year in sorted(data["year"].unique()):
     if year < 2022:
         continue
+    # Same walk-forward idea as models.walk_forward: train on earlier years, test on this one.
     train, test = data[data["year"] < year].copy(), data[data["year"] == year].copy()
-    if test["spike"].nunique() < 2:
+    if test["spike"].nunique() < 2:          # AUC needs both spike and non-spike days to compare
         continue
+    # Two classifiers that output a PROBABILITY of a spike day:
+    #   logistic regression = a linear model squeezed into 0..1 by the S-shaped logistic curve;
+    #   LightGBM classifier = the boosted-tree version.
     logit = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000)).fit(train[feats], train["spike"])
     gbm = lgb.LGBMClassifier(n_estimators=300, learning_rate=0.03, num_leaves=15, min_child_samples=20,
                              verbose=-1).fit(train[feats], train["spike"])
+    # "Base rate" forecast: give every day the historical spike frequency. A model's Brier
+    # score (mean squared error of its probabilities) must beat this to be worth anything.
     base = np.full(len(test), train["spike"].mean())
+    # predict_proba returns [P(no spike), P(spike)] per day; [:, 1] keeps P(spike).
     test["p_logit"] = logit.predict_proba(test[feats])[:, 1]
     test["p_gbm"] = gbm.predict_proba(test[feats])[:, 1]
     results.append({
         "year": year, "spike days": int(test["spike"].sum()), "days": len(test),
+        # AUC: chance a random spike day is scored higher than a random normal day (0.5 = coin
+        # flip). "Yesterday only" scores days by how stretched yesterday was: the persistence
+        # baseline, since heat waves last several days. The models must beat it.
         "AUC yesterday only": roc_auc_score(test["spike"], test["ihr_lag_rel"]),
         "AUC logit": roc_auc_score(test["spike"], test["p_logit"]),
         "AUC LightGBM": roc_auc_score(test["spike"], test["p_gbm"]),

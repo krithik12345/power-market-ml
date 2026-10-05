@@ -90,6 +90,8 @@ for y, g in day.groupby("year"):
         continue
     r_load = smf.ols("log_max_ihr ~ load_peak_gw + C(month)", g).fit()
     r_net = smf.ols("log_max_ihr ~ netload_peak_gw + C(month)", g).fit()
+    # Head to head: both peaks in one model. scale() puts each on a mean-0, std-1 footing, so the
+    # two coefficients are directly comparable: the bigger one is the stronger driver.
     both = smf.ols("log_max_ihr ~ scale(load_peak_gw) + scale(netload_peak_gw) + C(month)", g).fit(**HAC)
     rows.append({
         "year": y, "days": len(g),
@@ -110,10 +112,14 @@ ax.set_title("Head to head: which peak drives ERCOT price spikes?")
 ax.legend(); fig.tight_layout(); fig.savefig(OUT / "horse_race.png", dpi=150); plt.close(fig)
 
 # ---------------------------------------------------------------- 4. pooled test: is the shift statistically real?
+# All years in one model. "a * b" in a formula means a + b + a:b, so each peak gets an
+# interaction with trend_yrs: how much its effect changes PER YEAR.
 pooled = smf.ols("log_max_ihr ~ scale(load_peak_gw) * trend_yrs + scale(netload_peak_gw) * trend_yrs + C(month) + C(dow)",
                  day).fit(**HAC)
 k_net, k_load = "scale(netload_peak_gw):trend_yrs", "scale(load_peak_gw):trend_yrs"
 # The thesis is about the GAP: does net load gain on load over time? Test (net x trend) - (load x trend) = 0.
+# Two separate p-values can't answer "is A changing faster than B?"; t_test on the difference
+# can, because it uses the covariance between the two estimates.
 gap = pooled.t_test(f"{k_net} - {k_load} = 0")
 gap_coef, gap_se, gap_p = float(gap.effect[0]), float(gap.sd[0, 0]), float(gap.pvalue)
 
