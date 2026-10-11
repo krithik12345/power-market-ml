@@ -44,14 +44,14 @@ prices can't influence, the same reverse-causality fix used in T01b.
 
 | model               |   ramp (per GW) |   battery (per GW) |   ramp x battery |     s.e. |   p-value |    n |     R² |
 |:--------------------|----------------:|-------------------:|-----------------:|---------:|----------:|-----:|-------:|
-| No interaction      |          0.3819 |            -0.5497 |         nan      | nan      |  nan      | 2791 | 0.1723 |
-| Ramp x battery      |          0.4871 |             0.466  |          -0.0422 |   0.0143 |    0.0031 | 2791 | 0.1763 |
-| + ramp x time trend |         -1.2871 |            -0.507  |          -0.1912 |   0.0352 |    0      | 2791 | 0.3362 |
-| Excluding 2022      |          0.4905 |             0.3441 |          -0.0466 |   0.0153 |    0.0023 | 2426 | 0.187  |
-| 2023+ only          |          0.8433 |            -0.251  |          -0.1116 |   0.024  |    0      | 1371 | 0.3837 |
+| No interaction      |          0.3817 |            -0.5492 |         nan      | nan      |  nan      | 2791 | 0.1723 |
+| Ramp x battery      |          0.487  |             0.4674 |          -0.0423 |   0.0143 |    0.003  | 2791 | 0.1763 |
+| + ramp x time trend |         -1.2872 |            -0.5051 |          -0.1912 |   0.0352 |    0      | 2791 | 0.3362 |
+| Excluding 2022      |          0.4903 |             0.3455 |          -0.0466 |   0.0153 |    0.0023 | 2426 | 0.187  |
+| 2023+ only          |          0.8432 |            -0.2493 |          -0.1116 |   0.024  |    0      | 1371 | 0.3837 |
 
 - Extra premium per GW of ramp with **no batteries**: +0.487 (s.e. 0.084).
-- At the **2026 fleet** (8.7 GW): +0.119 (s.e. 0.117).
+- At the **2026 fleet** (8.7 GW): +0.118 (s.e. 0.117).
 
 ![](ramp_effect_vs_batteries.png)
 

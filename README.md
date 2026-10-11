@@ -22,6 +22,10 @@ ties each one to the code and the results, and ends with review questions. Rebui
 | [EIA natural gas spot (RNGWHHD)](https://www.eia.gov/dnav/ng/hist/rngwhhdd.htm) | Henry Hub spot | Daily, 1997+ |
 | [EIA-930 via API v2](https://www.eia.gov/opendata/) | Demand, day-ahead demand forecast, generation by fuel per balancing authority | Daily and hourly, 2019+ |
 | [ERCOT NP4-180-ER](https://www.ercot.com/mp/data-products/data-product-details?id=NP4-180-ER) | Day-ahead prices at ERCOT's trading hubs (HB_NORTH, HB_HOUSTON, HB_SOUTH, HB_WEST, HB_PAN, HB_HUBAVG) | **Hourly**, 2019+ |
+| [ERCOT NP6-785-ER](https://www.ercot.com/mp/data-products/data-product-details?id=NP6-785-ER) | Real-time prices at ERCOT's trading hubs | **15-minute** (averaged to hourly), 2019+ |
+| [ERCOT NP4-181-ER](https://www.ercot.com/mp/data-products/data-product-details?id=NP4-181-ER) | Day-ahead ancillary-service prices: REGUP, REGDN, RRS, ECRS, NSPIN | Hourly, 2019+ |
+| CAISO fuel mix and load, via [gridstatus](https://github.com/gridstatus/gridstatus) | CAISO's own generation by fuel, with batteries reported directly | **5-minute** (averaged to hourly), 2019+ |
+| CAISO OASIS, via gridstatus | Day-ahead prices at SP15 | Hourly, mid-2023+ (OASIS keeps ~3 years) |
 
 Hub → balancing authority: SP15→CISO, Mid-C→BPAT, Palo Verde→AZPS+SRP, PJM West→PJM, Mass Hub→ISNE, ERCOT hubs→ERCO.
 
@@ -35,6 +39,9 @@ Hub → balancing authority: SP15→CISO, Mid-C→BPAT, Palo Verde→AZPS+SRP, P
 | T03 | PJM West heat rate is convex in load; spike days are forecastable | PJM West | **Supported**: [report](reports/T03_pjm_convexity/report.md) |
 | E1 | ERCOT scarcity has moved from the demand peak to the evening net-load peak | ERCOT hub avg | **Supported**: [report](reports/E1_ercot_netload_peak/report.md) |
 | E2 | ERCOT's battery fleet is flattening the evening price premium | ERCOT hub avg | **Supported, with a caution**: [report](reports/E2_ercot_batteries/report.md) |
+| D1 | Storage is reshaping the duck curve, and CAISO is further along than ERCOT | CAISO, ERCOT | **Parts 1-2 supported, part 3 not** (biased test): [report](reports/D1_duck_curve/report.md) |
+| E3 | ERCOT batteries are shrinking evening real-time spikes above day-ahead | ERCOT hub avg | **Supported**: [report](reports/E3_ercot_dart/report.md) |
+| E4 | Batteries have saturated ERCOT's ancillary-service markets | ERCOT | **Supported**: [report](reports/E4_ercot_ancillary/report.md) |
 | T04 | Mass Hub winter heat rate spikes are a gas-constraint regime, not a load regime | Mass Hub | Parked |
 | F01 | Next-day on-peak price forecast: can fundamentals beat persistence? | all | **All 5 hubs done**: `reports/forecast_*/` |
 
@@ -76,6 +83,24 @@ was needed to see batteries.
   fleet grew to about 9 GW. Ramp × battery is negative and significant in every specification. Caution: the
   evidence comes from 2023 onward, because before then the evening wasn't where scarcity lived (E1).
 
+### Beyond EIA: ISO data (CAISO and ERCOT)
+
+The studies below use the grid operators' own data rather than EIA's: hourly and 15-minute prices,
+reserve prices, and CAISO's own generation mix.
+
+- **D1, the duck curve.** Storage now removes **55% of CAISO's evening net-load ramp** and **39% of ERCOT's**
+  (0% in 2019). In CAISO the ramp gas plants actually face has *shrunk* from 15.6 GW (2022) to 12.2 GW,
+  even though the raw ramp doubled. A third test (do prices follow the storage-adjusted ramp?) failed, but
+  it uses same-day battery dispatch, which reacts to prices; E2 is the clean version of that question.
+- **E3, real time vs day-ahead.** Each GW of batteries lowers evening real-time spikes above day-ahead by
+  about $1.79/MWh (significant in all five specifications). The evening day-ahead "insurance premium" over
+  real time fell from **$17.49/MWh (2023) to $0.72 (2026)**.
+- **E4, reserves.** ERCOT reserve prices fall about **26-30% per GW** of battery fleet. Responsive Reserve
+  went from $17.11/MW-h (2021) to $0.71 (2026).
+- **A data finding along the way:** EIA-930's hourly CAISO timestamps drift by up to 1.5 hours between
+  mid-2022 and 2025 (solar appears to peak at 2-3pm). ERCOT's EIA data passes the same check. The CAISO
+  work here uses CAISO's own data instead.
+
 ### Forecast results across hubs (MAE $/MWh, test years 2022+)
 
 | Hub | Persistence | Best model | Best MAE | Improvement |
@@ -111,6 +136,9 @@ python scripts/thesis_01_solar_cannibalization.py
 python scripts/forecast_benchmark.py --hub SP15
 python scripts/thesis_e1_ercot_netload_peak.py   # downloads ERCOT prices on first run
 python scripts/thesis_e2_ercot_batteries.py
+python scripts/thesis_d1_duck_curve.py          # first run downloads CAISO data (~1 hour)
+python scripts/thesis_e3_ercot_dart.py
+python scripts/thesis_e4_ercot_ancillary.py
 pytest -q
 ```
 
@@ -119,8 +147,10 @@ pytest -q
 - ICE on-peak is a daily HE7–22 block, so it blends the solar trough with the evening ramp.
 - Henry Hub is the gas denominator everywhere. Regional basis (SoCal, Algonquin) matters a lot in
   western and New England winters and isn't in EIA's free daily data.
-- ERCOT North dropped out of EIA's ICE files after 2018, so ERCOT prices come from ERCOT directly. They're
-  day-ahead only; real-time prices and ancillary services, where batteries also earn, aren't modeled.
+- ERCOT North dropped out of EIA's ICE files after 2018, so ERCOT prices come from ERCOT directly.
+- CAISO hourly prices are free only from mid-2023 (CAISO's rolling archive). Earlier years need a paid
+  archive such as Gridstatus's hosted API.
+- Congestion trades (FTRs/CRRs, spreads between nodes) aren't modeled; they need node-level prices.
 
 ## Disclaimer
 

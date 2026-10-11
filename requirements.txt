@@ -11,3 +11,4 @@ statsmodels
 matplotlib
 tabulate
 pytest
+gridstatus

@@ -179,10 +179,11 @@ table([
     ["6. Evaluation", "Walk-forward backtests, leakage, MAE/RMSE, coverage, AUC, Brier, fair baselines"],
     ["7. The theses, walked through", "T01, T01b, T02, T03 and the forecast benchmark: method, result, limits"],
     ["8. ERCOT: hourly data", "A second data source, hourly prices, and theses E1 (scarcity moved to the evening) and E2 (batteries)"],
-    ["9. Research lessons", "The five times a first result was wrong, and how it was caught"],
-    ["10. Code map", "Which file does what, and which concepts it uses"],
-    ["11. Review questions", "Questions to test your understanding, with short answers"],
-    ["12. Glossary and study plan", "Terms and what to learn next"],
+    ["9. Beyond EIA: ISO data", "CAISO and ERCOT's own data; D1 (the duck curve), E3 (real-time vs day-ahead) and E4 (reserve prices); physical vs financial trading"],
+    ["10. Research lessons", "The eight times a first result was wrong, and how it was caught"],
+    ["11. Code map", "Which file does what, and which concepts it uses"],
+    ["12. Review questions", "Questions to test your understanding, with short answers"],
+    ["13. Glossary and study plan", "Terms and what to learn next"],
 ], [1.9, 4.6])
 story.append(PageBreak())
 
@@ -203,7 +204,7 @@ B("<b>Python and pandas:</b> reading a DataFrame, filtering, merging, and groupb
   "<b>No power-market background needed.</b> Part 2 starts from zero.")
 H2("How to read it")
 P("Parts 1 to 6 build up the concepts in order: markets, data, statistics, models, evaluation. Part 7 applies all of them to the four studies "
-  "on the EIA hubs, Part 8 extends the project to Texas with hourly ERCOT data, and Part 9 covers what went wrong along the way. If you only have an hour, read Part 1, the 'key idea' notes, Part 7 and Part 8. "
+  "on the EIA hubs, Part 8 extends the project to Texas with hourly ERCOT data, Part 9 moves beyond EIA to the ISOs' own data, and Part 10 covers what went wrong along the way. If you only have an hour, read Part 1, the 'key idea' notes, and Parts 7 to 9. "
   "Each part ends with a <font color='#5a6b38'><b>Check yourself</b></font> list. If you can explain every item out loud without looking, you've got that part.")
 H2("Run it yourself")
 P("Reading is good; changing the code and predicting what happens is better. Setup takes about ten minutes:")
@@ -256,6 +257,9 @@ table([
     ["F01 Forecasts", "Models beat 'tomorrow = today' at all five hubs: 20% better at PJM West, 2% at Mid-C.", "Done"],
     ["E1 ERCOT peak hour", "The most expensive hour moved from 5pm (demand peak) to 8pm (net-load peak). Days priced near the demand peak fell from 74% to 13%.", "Supported"],
     ["E2 ERCOT batteries", "The evening ramp more than doubled but its price per GW fell from 2.2 (2023) to 0.1 (2026) as batteries grew to about 9 GW.", "Supported, with a caution"],
+    ["D1 Duck curve", "Storage now removes 55% of CAISO's evening ramp and 39% of ERCOT's (0% in 2019). CAISO's storage-adjusted ramp is shrinking.", "Parts 1-2 supported; part 3 not (biased test)"],
+    ["E3 ERCOT real time", "Each GW of batteries cuts evening real-time spikes above day-ahead. The day-ahead 'insurance premium' fell from $17.49 to $0.72/MWh.", "Supported"],
+    ["E4 ERCOT reserves", "Reserve prices fell about 26-30% per GW of batteries; RRS went from $17 (2021) to $0.71/MW-h (2026).", "Supported"],
 ], [1.35, 4.15, 1.0])
 story.append(PageBreak())
 
@@ -740,9 +744,95 @@ YOU(["Why ERCOT needed a different data source, and how the code finds ERCOT's y
 story.append(PageBreak())
 
 # =====================================================================================
+# 9. BEYOND EIA
+# =====================================================================================
+H1("9. Beyond EIA: working with the ISOs' own data")
+P("EIA is a convenient starting point, but practitioners work from the grid operators' own data: hourly and 5-minute prices, generation "
+  "by fuel, reserve prices, and real-time vs day-ahead spreads. This part moves the project onto that data, prompted by advice from a power "
+  "trader, and adds three studies that only become possible with it.")
+H2("9.1 The new data sources")
+table([
+    ["Source", "What it adds", "How it's fetched", "Code"],
+    ["ERCOT real-time prices (NP6-785-ER)", "15-minute real-time prices at every hub, so day-ahead can be compared with what actually cleared", "ERCOT's public yearly files, averaged to hourly", "ercot.rtm_hub_prices()"],
+    ["ERCOT ancillary prices (NP4-181-ER)", "Hourly prices for each reserve product: REGUP, REGDN, RRS, ECRS, NSPIN", "ERCOT's public yearly files", "ercot.as_prices()"],
+    ["CAISO fuel mix and load", "5-minute generation by fuel, with batteries reported directly (charging and discharging)", "The open-source gridstatus library, no key", "caiso.hourly_grid()"],
+    ["CAISO hourly prices (OASIS)", "Hourly day-ahead prices at SP15, instead of EIA's one daily number", "gridstatus; CAISO keeps only about 3 years (mid-2023 on)", "caiso.dam_hub_prices()"],
+], [1.4, 2.1, 1.55, 1.45])
+B("<b>One loader for many reports.</b> ERCOT's day-ahead, real-time and reserve archives share a layout (one zip per year, linked by a changing ID), so "
+  "<font face='Mono'>ercot._yearly()</font> handles all three. Each report only needs a small parser. One 2026 workbook added seven title rows above the "
+  "header, so the reader now looks for the 'Delivery Date' row instead of assuming row 1.",
+  "<b>gridstatus.</b> An open-source Python package that hides each ISO's quirks: CAISO's zipped CSVs, 31-day request limits and rate limits. Its company "
+  "also sells a hosted API with a longer price history, which is the way to get CAISO hourly prices before mid-2023.",
+  "<b>Caching missing months.</b> When CAISO's archive has nothing for a month, the loader saves an empty file so later runs don't keep asking.")
+KEY(["<b>How an error in EIA's data was caught.</b> Solar output peaks around noon, so the solar-weighted average hour of the day should stay put "
+     "from year to year. For ERCOT it did (hour-ending 13.8 to 14.1 every year). For CAISO's EIA series it drifted from about 12.8 to 14.4 between "
+     "mid-2022 and 2025, then snapped back. The sun didn't move; EIA's CAISO timestamps did. Switching to CAISO's own fuel mix removed the problem. "
+     "This one-line check (where does solar peak?) is worth running on any hourly energy dataset."])
+
+H2("9.2 D1: the duck curve, CAISO vs ERCOT")
+P("The <b>duck curve</b> is the daily shape of net load: a deep midday belly when solar peaks, then a steep evening neck when the sun sets. "
+  "Batteries charge in the belly and discharge into the neck. So the load gas plants actually have to follow, the <b>residual load</b> "
+  "(net load minus storage output), should have a flatter neck than net load itself.")
+table([["Question", "Is storage reshaping the duck in both markets, is CAISO further along, and do evening prices follow the storage-adjusted ramp?"],
+       ["Measures", "Evening ramp = evening (HE17-23) peak minus midday (HE9-16) trough, for net load and for residual load. Storage shave = share of the net-load ramp storage removes. Belly depth = how far midday net load sinks below peak demand."],
+       ["Result", "Storage shave rose from 0% to 55% in CAISO and from 0% to 39% in ERCOT (2019 to 2026). CAISO's raw ramp grew from 13.9 to 26.9 GW, yet the ramp gas plants face shrank from 15.6 GW (2022) to 12.2 GW. CAISO's belly is now so deep that on many days midday solar and wind exceed demand."],
+       ["Part 3", "Not supported: the storage-adjusted ramp doesn't explain the evening premium better than the raw ramp. But the test is biased (see below)."]],
+      [1.0, 5.5], header=False)
+fig(REP / "D1_duck_curve" / "duck_evolution.png", "D1: top row, the raw duck; bottom row, after storage. CAISO's evening neck has dropped from about 27 to about 18 GW.", 6.5)
+WATCH(["<b>Why part 3 misleads.</b> Residual load subtracts what batteries actually did that day, and batteries discharge more on days when evening "
+       "prices are high. So on the most expensive evenings the residual ramp looks smaller, weakening its link to price. That's reverse causality, "
+       "the same trap E2 avoided by measuring fleet <i>capability</i>. A test can fail because the idea is wrong or because the test is wrong; "
+       "always check which."])
+
+H2("9.3 E3: real time vs day-ahead in ERCOT")
+P("Every hour clears twice: day-ahead (DA) the day before, and real-time (RT) on the day. <b>DART</b> = RT price minus DA price. Virtual traders "
+  "trade exactly this gap. A <b>dec</b> buys in DA and sells back in RT, so it wins when RT spikes above DA. An <b>inc</b> sells in DA and buys back "
+  "in RT, so it wins when DA turns out too high.")
+table([["Question", "Is ERCOT's battery fleet shrinking evening real-time spikes above day-ahead?"],
+       ["Method", "Daily evening upside DART: the average of max(RT - DA, 0) over HE19-22, divided by gas. Regressed on the battery fleet with the evening ramp, net-load peak, wind, month and weekday as controls (HAC). Checked with a time trend, without 2022, 2023 on only, and at the 90th percentile (quantile regression)."],
+       ["Result", "Negative and significant in all five versions: each GW of batteries lowers evening upside DART by about 0.50 heat-rate units, roughly $1.79/MWh at 2026 gas."],
+       ["The pattern", "Evening DA usually cleared above RT (7 of 8 years), an insurance premium against rare RT spikes. That premium peaked at $17.49/MWh in 2023 and fell to $0.72 by 2026. Spikes got much smaller (standard deviation 325 to 54 $/MWh) but only somewhat rarer (7.0% to 4.5% of hours)."]],
+      [1.0, 5.5], header=False)
+fig(REP / "E3_ercot_dart" / "rt_spikes_by_hour.png", "E3: how far real time spikes above day-ahead, by hour. The evening hump peaked in 2023 and has collapsed since.", 5.8)
+
+H2("9.4 E4: reserve prices in ERCOT")
+P("<b>Ancillary services</b> pay a resource to stand ready rather than to produce energy. Prices are $ per MW per hour of standby capacity. "
+  "Batteries are ideal for the fast products (Regulation and Responsive Reserve), and the early Texas fleet earned most of its money there.")
+table([["Question", "Have batteries saturated ERCOT's reserve markets?"],
+       ["Method", "Log of each product's daily price, regressed on the battery fleet with log gas, net-load peak, month and weekday as controls (HAC); checked with a time trend and 2023 on only. A log model reads as '% change per GW'."],
+       ["Result", "Prices fall about 26% (REGUP) and 30% (RRS) per GW of fleet, and still 19% with a time trend. RRS went from $17.11/MW-h (2021) to $0.71 (2026). Illustratively, selling RRS every hour was worth about $186/kW-year in 2023 and $14 in 2026, while daily arbitrage fell from about $120 to $33."],
+       ["Caveat", "ERCOT changed how much reserve it buys (more after Uri, ECRS added mid-2023, trimmed since). ECRS's own time-trend row even flips sign, because ECRS only exists in the battery build-out years."]],
+      [1.0, 5.5], header=False)
+fig(REP / "E4_ercot_ancillary" / "battery_revenue_mix.png", "E4: illustrative revenue for 1 MW of 2-hour battery. Reserve revenue collapsed after 2023; arbitrage is now the larger line, and it's shrinking too.", 5.8)
+
+H2("9.5 How D1, E2, E3 and E4 fit together")
+B("<b>D1:</b> storage is physically reshaping the evening, most in CAISO.",
+  "<b>E2:</b> in ERCOT, that's compressing the day-ahead evening premium.",
+  "<b>E3:</b> and it's removing the real-time spikes that made the evening risky.",
+  "<b>E4:</b> meanwhile the reserve markets that early batteries relied on have saturated.")
+P("Together: <b>every revenue line a battery depends on is being competed away by other batteries.</b> That's the cannibalization theme that runs from T01 "
+  "(solar) through to storage.")
+
+H2("9.6 Physical vs financial power trading")
+P("Power trading splits into two worlds. The project touches both, but most of its tests are on the physical side.")
+table([
+    ["", "Physical trading", "Financial trading"],
+    ["What it is", "Managing the actual production and delivery of electricity", "Taking positions on prices without delivering power"],
+    ["Core topics", "The supply stack and dispatch by heat rate and fuel cost; scheduling and offering generation into day-ahead and real-time markets; ancillary services", "Virtual bids (incs and decs) on the DA/RT spread; spread trades on congestion between two nodes (Up-To-Congestion, Point-to-Point); Financial Transmission Rights (FTRs, called CRRs in ERCOT and CAISO) that hedge or bet on congestion over months"],
+    ["Where it appears here", "T03 (supply stack convexity), E1 and E2 (dispatch into the evening), E4 (ancillary services)", "E3 (the DA/RT spread that incs and decs trade). Congestion trades (UTC, PTP, FTR/CRR) aren't modeled yet; they need node-level prices"],
+], [1.15, 2.6, 2.75])
+YOU(["Why ISO data beats EIA for this kind of work, and what each new source adds.",
+     "How the solar-peak check exposed the timing error in EIA's CAISO data.",
+     "What residual load and storage shave measure, and why part 3 of D1 is a biased test.",
+     "What DART is, and who wins on each side: an inc or a dec.",
+     "Why reserve prices are modeled in logs, and why ECRS's time-trend result can't be trusted.",
+     "The difference between physical and financial trading, with one example of each from the project."])
+story.append(PageBreak())
+
+# =====================================================================================
 # 8. LESSONS
 # =====================================================================================
-H1("9. Research lessons: five times the first answer was wrong")
+H1("10. Research lessons: eight times the first answer was wrong")
 P("These are worth knowing cold. They show the difference between running models and doing research. Each is a mistake that is easy to make and easy to miss.")
 table([
     ["#", "First result", "What was wrong", "Fix", "Lesson"],
@@ -751,6 +841,9 @@ table([
     ["3", "Spike-day AUC 0.88", "Cheap 2024 gas made 44% of days 'spikes', and heat waves are persistent", "Relative spike label; yesterday-only baseline", "Inspect your label's base rate by year; always compare to the dumbest reasonable model"],
     ["4", "E1: 'net load's effect isn't growing' (p = 0.37)", "The test asked the wrong question. The thesis is about net load gaining <i>relative to</i> demand", "Test the difference of the two trend terms: +0.087/yr, p = 0.004", "Make the statistical test match the claim. Then report what actually moved (demand lost relevance)"],
     ["5", "E2: one straight line across 2019-2026", "Before 2023 the ramp didn't set evening prices at all, so pooling mixed two regimes", "Per-year slopes, a 2023+ model, and an explicit caution in the verdict", "Plot the per-period estimates before trusting one pooled number"],
+    ["6", "CAISO's duck from EIA data looked fine at a glance", "EIA's CAISO timestamps drifted up to 1.5 hours (2022-2025)", "Checked where solar peaks each year; switched to CAISO's own data", "Run a physical sanity check on every hourly dataset"],
+    ["7", "D1 part 3: 'prices don't follow the storage-adjusted ramp'", "Same-day battery dispatch reacts to prices (reverse causality)", "Reported as not supported and biased; pointed to E2's capability-based test", "A failed test can mean a flawed test. Say which"],
+    ["8", "E3's pre-written story: decs profit from spikes that are getting rarer", "Data showed evening DA usually above RT, and spikes shrank in size more than frequency", "Rewrote the interpretation from the numbers", "Write conclusions after the data, not before"],
 ], [0.25, 1.35, 1.75, 1.35, 1.8])
 H2("The general workflow")
 B("State the thesis as something that could turn out false, with a predicted sign.",
@@ -764,7 +857,7 @@ story.append(PageBreak())
 # =====================================================================================
 # 9. CODE MAP
 # =====================================================================================
-H1("10. Code map")
+H1("11. Code map")
 table([
     ["File", "What it does", "Concepts"],
     ["powerml/config.py", "Paths, hub definitions, hub-to-BA map, fuel codes", "Hubs, BAs"],
@@ -780,6 +873,11 @@ table([
     ["powerml/ercot.py", "ERCOT hourly hub prices from ERCOT's site; hourly EIA-930 for ERCO; battery proxy; daily ERCOT panel", "Scraping a report index, hour-ending alignment, time zones, DST"],
     ["scripts/thesis_e1_*.py", "ERCOT peak-hour shift", "Daily shapes, standardized coefficients, R² comparison, difference test"],
     ["scripts/thesis_e2_*.py", "ERCOT batteries and the evening premium", "Interactions, delta method, regime change, collinearity"],
+    ["powerml/caiso.py", "CAISO hourly prices (OASIS) and CAISO's own load and fuel mix, via gridstatus", "Month-by-month caching, rolling archives, rate limits"],
+    ["data.hourly_grid()", "Shared hourly EIA-930 builder for any balancing authority (used for ERCOT)", "UTC to local hour-ending alignment"],
+    ["scripts/thesis_d1_*.py", "Duck curve, CAISO vs ERCOT", "Residual load, storage shave, R² comparison, reverse causality"],
+    ["scripts/thesis_e3_*.py", "ERCOT real-time vs day-ahead", "DART, quantile regression, robustness checks"],
+    ["scripts/thesis_e4_*.py", "ERCOT reserve prices", "Log-price regressions, illustrative revenue stack"],
     ["tests/test_pipeline.py", "Two leakage guards on synthetic data", "Testing for leakage"],
 ], [1.75, 2.85, 1.9])
 H2("Running it")
@@ -796,7 +894,7 @@ story.append(PageBreak())
 # =====================================================================================
 # 10. INTERVIEW PREP
 # =====================================================================================
-H1("11. Review questions")
+H1("12. Review questions")
 P("Try to answer each question before reading the answer. They mix concepts from every part of the guide.")
 qa = [
     ("Summarize the project in three sentences.",
@@ -832,6 +930,13 @@ qa = [
     ("In E1, why test the difference between two trend terms?",
      "The claim is that net load gained on demand as the price driver. Each trend term alone answers a different question. The difference "
      "was significant (+0.087 per year, p = 0.004), and it turned out to come from demand losing relevance rather than net load gaining."),
+    ("What's the difference between an inc and a dec, and what did E3 find about them?",
+     "A dec buys day-ahead and sells back in real time, so it wins when real time spikes. An inc does the opposite. Evening day-ahead "
+     "usually cleared above real time, a premium for spike protection that decs paid and incs collected. As batteries removed the spikes, "
+     "that premium fell from $17.49 to $0.72/MWh."),
+    ("Why did D1's third test fail, and does that mean the idea is wrong?",
+     "Not necessarily. Residual load uses same-day battery dispatch, and batteries discharge more when prices are high, so the measure is "
+     "partly caused by the price it's meant to explain. E2's capability-based measure is the clean test, and it supports the idea."),
     ("What's the difference between AUC and precision in the top 10%?",
      "AUC measures ranking across all thresholds. Precision in the top 10% is what you'd get acting only on the model's strongest warnings: 66% against an 11% base rate."),
 ]
@@ -842,7 +947,7 @@ story.append(PageBreak())
 # =====================================================================================
 # 11. GLOSSARY + STUDY PLAN
 # =====================================================================================
-H1("12. Glossary")
+H1("13. Glossary")
 gl = [
     ("AUC", "Probability a random positive case is ranked above a random negative one"),
     ("Balancing authority (BA)", "Entity that balances supply and demand in an area; EIA-930 reports by BA"),
@@ -870,6 +975,15 @@ gl = [
     ("Spark spread", "Power price minus (plant heat rate x gas price)"),
     ("Walk-forward", "Train on the past, test on the next period, roll forward"),
     ("Winsorize", "Cap extreme values at a chosen percentile"),
+    ("Ancillary services", "Payments for standing ready (regulation, reserves) rather than producing energy"),
+    ("DART", "Real-time price minus day-ahead price for the same hour"),
+    ("Dec / Inc", "Virtual trades: a dec buys day-ahead and sells real time; an inc sells day-ahead and buys real time"),
+    ("Duck curve", "The daily net-load shape: deep midday belly from solar, steep evening neck"),
+    ("ECRS", "ERCOT Contingency Reserve Service, a reserve product added in June 2023"),
+    ("FTR / CRR", "Rights that pay the congestion price difference between two nodes over months"),
+    ("Residual load", "Net load minus storage output: what other plants must follow"),
+    ("RRS / REGUP", "Responsive Reserve and Regulation Up, ERCOT's fast reserve products"),
+    ("Storage shave", "Share of the evening net-load ramp removed by storage"),
     ("Collinearity", "Two regressors moving almost together, so a model can't split credit between them"),
     ("Evening premium", "Evening (HE19-22) price minus midday (HE10-15) price, divided by gas"),
     ("Hour ending (HE)", "Hours labeled by when they end: HE20 is 7pm-8pm"),
@@ -888,9 +1002,14 @@ table([
     ["Gradient boosting", "How LightGBM really works", "LightGBM docs, 'Parameters Tuning' page; XGBoost paper intro"],
     ["Quantile and probabilistic forecasting", "Fixing the 72% coverage", "Conformal prediction tutorials; pinball loss"],
     ["Options on power", "The T03 trade expression", "Hull, 'Options, Futures, and Other Derivatives': options basics and volatility"],
+    ["CAISO market design", "The 'why' behind CAISO's data: scheduling, settlement", "CAISO's free training: caiso.com/stakeholder/training"],
+    ["Physical trading", "Supply stack, dispatch, ancillary services", "ISO training pages; search each term for practitioner walkthroughs"],
+    ["Financial trading", "Virtuals (incs/decs), UTC and PTP spreads, FTRs/CRRs", "ISO market manuals; congestion needs node-level prices, a natural next project"],
+    ["Multi-ISO data", "Clean data across markets without each portal's quirks", "gridstatus (open source) and gridstatus.io (hosted API)"],
 ], [1.7, 1.7, 3.1])
 P("Suggested exercises, in order: (1) recompute one number from a report by hand in a notebook; (2) rerun T01 excluding 2022-23 and see what changes; "
-  "(3) recalibrate the P10-P90 bands so coverage reaches 80%; (4) rerun E2 on ERCOT real-time prices instead of day-ahead; (5) pull CAISO OASIS hourly prices and see whether E2's result holds in California.")
+  "(3) recalibrate the P10-P90 bands so coverage reaches 80%; (4) rerun E2 on ERCOT real-time prices instead of day-ahead; (5) rerun E2 for CAISO using caiso.dam_hub_prices() (2023 on); (6) test whether "
+  "ERCOT congestion between HB_WEST and HB_HOUSTON tracks West Texas wind and solar, the simplest congestion trade.")
 
 doc = SimpleDocTemplate(str(OUT), pagesize=letter, leftMargin=0.9 * inch, rightMargin=0.9 * inch,
                         topMargin=0.8 * inch, bottomMargin=0.85 * inch,

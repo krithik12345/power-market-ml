@@ -17,37 +17,86 @@ from datetime import date
 import pandas as pd
 import requests
 
-from .config import CACHE, EIA930_FIRST_DAY, RAW
-from .data import eia_api
+from .config import CACHE, RAW
+from .data import hourly_grid
 
-LIST_URL = "https://www.ercot.com/misapp/GetReports.do?reportTypeId=13060"
+LIST_URL = "https://www.ercot.com/misapp/GetReports.do?reportTypeId={}"
 FILE_URL = "https://www.ercot.com/misdownload/servlets/mirDownload?doclookupId={}"
 HEADERS = {"User-Agent": "Mozilla/5.0 (power-market-ml research)"}
 HUBS = ("HB_NORTH", "HB_HOUSTON", "HB_SOUTH", "HB_WEST", "HB_PAN", "HB_HUBAVG")
 
+# ERCOT's public yearly archives used here: (report type ID, file-name tag)
+REPORTS = {
+    "dam": (13060, "DAMLZHBSPP"),   # day-ahead hub & load-zone prices, hourly
+    "rtm": (13061, "RTMLZHBSPP"),   # real-time hub & load-zone prices, 15-minute
+    "as": (13091, "DAMASMCPC"),     # day-ahead ancillary-service clearing prices, hourly
+}
 
-def _yearly_doc_ids() -> dict[int, str]:
-    """Map each year to the document ID of its price file, read from ERCOT's report page.
+
+def _yearly_doc_ids(kind: str = "dam") -> dict[int, str]:
+    """Map each year to the document ID of that report's yearly file, read from ERCOT's report page.
 
     ERCOT links files by numeric ID, not by name, and the IDs change every year. Reading the
     listing page with a regular expression means new years are picked up automatically.
     """
-    html = requests.get(LIST_URL, headers=HEADERS, timeout=60).text
+    report_id, tag = REPORTS[kind]
+    html = requests.get(LIST_URL.format(report_id), headers=HEADERS, timeout=60).text
     ids = {}
-    for name, doc in re.findall(r"DAMLZHBSPP_(\d{4})\.zip.*?doclookupId=(\d+)", html, flags=re.S):
+    for name, doc in re.findall(tag + r"_(\d{4})\.zip.*?doclookupId=(\d+)", html, flags=re.S):
         ids.setdefault(int(name), doc)          # listing is newest-first; keep the latest file per year
     if not ids:  # the link sometimes precedes the file name in the row
-        for doc, name in re.findall(r"doclookupId=(\d+).*?DAMLZHBSPP_(\d{4})\.zip", html, flags=re.S):
+        for doc, name in re.findall(r"doclookupId=(\d+).*?" + tag + r"_(\d{4})\.zip", html, flags=re.S):
             ids.setdefault(int(name), doc)
     return ids
 
 
-def _parse_year(content: bytes) -> pd.DataFrame:
-    # Open the zip in memory (no temp file), then read every monthly sheet of the workbook
-    # inside it. sheet_name=None returns {sheet name: table}; concat stacks Jan-Dec together.
+def _read_member(content: bytes) -> pd.DataFrame:
+    """Read the single file inside an ERCOT zip: a workbook (one sheet per month) or a CSV."""
     z = zipfile.ZipFile(io.BytesIO(content))
-    sheets = pd.read_excel(z.open(z.namelist()[0]), sheet_name=None)
-    df = pd.concat(sheets.values(), ignore_index=True)
+    name = z.namelist()[0]
+    if name.lower().endswith(".csv"):
+        return pd.read_csv(z.open(name))
+    # sheet_name=None returns {sheet name: table}; concat stacks Jan-Dec together.
+    sheets = pd.read_excel(z.open(name), sheet_name=None, header=None)
+    frames = []
+    for raw in sheets.values():
+        # Some workbooks put title rows above the real header. Use the row that starts with
+        # "Delivery Date" as the header and keep everything below it.
+        hits = raw.index[raw.iloc[:, 0].astype(str).str.strip() == "Delivery Date"]
+        if len(hits) == 0:
+            continue
+        body = raw.iloc[hits[0] + 1:].copy()
+        body.columns = [str(c).strip() for c in raw.iloc[hits[0]]]
+        frames.append(body)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _yearly(kind: str, parse, first_year: int, refresh: bool) -> pd.DataFrame:
+    """Download, parse and cache one ERCOT report year by year.
+
+    Past years never change, so they're read from the cache. The current year is still
+    growing, so it is re-downloaded on every run.
+    """
+    frames, ids = [], None
+    for year in range(first_year, date.today().year + 1):
+        path = CACHE / f"ercot_{kind}_{year}.parquet"
+        current = year == date.today().year
+        if path.exists() and not (refresh or current):
+            frames.append(pd.read_parquet(path))
+            continue
+        ids = ids or _yearly_doc_ids(kind)
+        if year not in ids:
+            continue
+        r = requests.get(FILE_URL.format(ids[year]), headers=HEADERS, timeout=600)
+        r.raise_for_status()
+        (RAW / f"ercot_{kind}_{year}.zip").write_bytes(r.content)
+        df = parse(_read_member(r.content))
+        df.to_parquet(path, index=False)
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _parse_dam(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = ["date", "hour", "repeated", "point", "price"]
     df = df[df["point"].isin(HUBS) & (df["repeated"] != "Y")]   # drop the duplicate hour at DST fall-back
     df["date"] = pd.to_datetime(df["date"], format="%m/%d/%Y")
@@ -56,66 +105,54 @@ def _parse_year(content: bytes) -> pd.DataFrame:
     return df[["date", "he", "point", "price"]]
 
 
+def _parse_rtm(df: pd.DataFrame) -> pd.DataFrame:
+    # Real-time prices settle every 15 minutes (4 intervals per hour). Average them to hourly so
+    # they line up one-to-one with day-ahead prices.
+    df.columns = ["date", "he", "interval", "repeated", "point", "type", "price"]
+    df = df[df["point"].isin(HUBS) & (df["repeated"] != "Y")].copy()
+    df["date"] = pd.to_datetime(df["date"], format="%m/%d/%Y")
+    df["he"] = df["he"].astype(int)
+    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    return df.groupby(["date", "he", "point"], as_index=False)["price"].mean()
+
+
+def _parse_as(df: pd.DataFrame) -> pd.DataFrame:
+    # One row per hour, one column per ancillary service ($/MW per hour of standby capacity).
+    # ECRS only exists from June 2023, so earlier years simply lack that column.
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    df = df[df["repeated hour flag"] != "Y"].copy()
+    out = pd.DataFrame({"date": pd.to_datetime(df["delivery date"], format="%m/%d/%Y"),
+                        "he": df["hour ending"].astype(str).str.slice(0, 2).astype(int)})
+    for c in ("regup", "regdn", "rrs", "nspin", "ecrs"):
+        out[c] = pd.to_numeric(df[c], errors="coerce") if c in df else float("nan")
+    return out
+
+
 def dam_hub_prices(first_year: int = 2019, refresh: bool = False) -> pd.DataFrame:
     """Hourly day-ahead settlement point prices ($/MWh) for ERCOT's trading hubs, long format."""
-    frames, ids = [], None
-    for year in range(first_year, date.today().year + 1):
-        path = CACHE / f"ercot_dam_{year}.parquet"
-        # Past years never change, so read them from the cache. The current year is still
-        # growing, so it is re-downloaded on every run.
-        current = year == date.today().year
-        if path.exists() and not (refresh or current):
-            frames.append(pd.read_parquet(path))
-            continue
-        ids = ids or _yearly_doc_ids()
-        if year not in ids:
-            continue
-        r = requests.get(FILE_URL.format(ids[year]), headers=HEADERS, timeout=300)
-        r.raise_for_status()
-        (RAW / f"ercot_dam_{year}.zip").write_bytes(r.content)
-        df = _parse_year(r.content)
-        df.to_parquet(path, index=False)
-        frames.append(df)
-    out = pd.concat(frames, ignore_index=True)
+    out = _yearly("dam", _parse_dam, first_year, refresh)
     out["price"] = pd.to_numeric(out["price"], errors="coerce")   # older cached years stored text
     return out
 
 
+def rtm_hub_prices(first_year: int = 2019, refresh: bool = False) -> pd.DataFrame:
+    """Hourly-averaged real-time settlement point prices ($/MWh) for ERCOT's trading hubs."""
+    return _yearly("rtm", _parse_rtm, first_year, refresh)
+
+
+def as_prices(first_year: int = 2019, refresh: bool = False) -> pd.DataFrame:
+    """Hourly day-ahead ancillary-service clearing prices ($/MW-h): REGUP, REGDN, RRS, NSPIN, ECRS."""
+    return _yearly("as", _parse_as, first_year, refresh)
+
+
 # --------------------------------------------------------------------------- EIA-930, local hours
-def _hourly(route: str, facets: dict, name: str, refresh: bool) -> pd.DataFrame:
-    """EIA-930 hourly series for ERCOT (UTC hour-ending periods), cached."""
-    path = CACHE / f"eia930_ERCO_{name}_hourly.parquet"
-    if path.exists() and not refresh:
-        return pd.read_parquet(path)
-    d = eia_api(route, facets, f"{EIA930_FIRST_DAY}T00", f"{date.today().isoformat()}T00", frequency="hourly")
-    key = "fueltype" if "fueltype" in d.columns else "type"
-    d = d[["period", key, "value"]].rename(columns={key: "series"})
-    d.to_parquet(path, index=False)
-    return d
-
-
 def hourly_fundamentals(refresh: bool = False) -> pd.DataFrame:
-    """Wide hourly ERCOT table: demand, solar, wind, gas and storage (MW), by local date and hour ending."""
-    gen = _hourly("electricity/rto/fuel-type-data",
-                  {"respondent": ["ERCO"], "fueltype": ["SUN", "WND", "NG", "OTH", "BAT"]}, "fuel", refresh)
-    dem = _hourly("electricity/rto/region-data", {"respondent": ["ERCO"], "type": ["D"]}, "demand", refresh)
-    d = pd.concat([gen, dem.assign(series="D")])
-    # EIA-930 periods are UTC and mark the END of the hour, the same convention as ERCOT's
-    # "hour ending". Step back one hour to the hour's start, convert to Central time, and the
-    # local date plus (start hour + 1) is ERCOT's delivery date and hour ending.
-    start = (d["period"] - pd.Timedelta("1h")).dt.tz_localize("UTC").dt.tz_convert("US/Central").dt.tz_localize(None)
-    d = d.assign(date=start.dt.normalize(), he=start.dt.hour + 1)
-    # Sanity check used when this was built: average solar should peak around HE13-15 in Texas.
-    # It does, which confirms the time-zone shift above is right.
-    wide = d.pivot_table(index=["date", "he"], columns="series", values="value", aggfunc="mean").reset_index()
-    wide = wide.rename(columns={"D": "demand", "SUN": "solar", "WND": "wind", "NG": "gas_gen",
-                                "OTH": "other", "BAT": "battery"})
-    for c in ("solar", "wind", "battery", "other"):
-        if c not in wide:
-            wide[c] = 0.0
-    wide[["solar", "wind"]] = wide[["solar", "wind"]].fillna(0.0)
-    wide["net_load"] = wide["demand"] - wide["solar"] - wide["wind"]
-    return wide
+    """Wide hourly ERCOT table: demand, solar, wind, gas and storage (MW), by local date and hour ending.
+
+    The work is done by data.hourly_grid(), shared with CAISO so both markets are built the same way.
+    Sanity check used when this was built: average Texas solar peaks around HE13-15, as it should.
+    """
+    return hourly_grid("ERCO", "US/Central", refresh=refresh)
 
 
 MIDDAY = range(10, 16)     # HE10-15: solar at full output

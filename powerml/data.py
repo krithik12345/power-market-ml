@@ -147,7 +147,11 @@ def eia_api(route: str, facets: dict, start: str, end: str, frequency: str = "da
     while True:
         params["offset"] = offset
         for attempt in range(4):
-            r = requests.get(f"{API_BASE}/{route}/data/", params=params, timeout=120)
+            try:
+                r = requests.get(f"{API_BASE}/{route}/data/", params=params, timeout=120)
+            except (requests.ConnectionError, requests.Timeout):
+                time.sleep(5 * 2 ** attempt)        # dropped connection: same backoff as a 429
+                continue
             # 429 = "too many requests", 5xx = server hiccup. Both are usually temporary, so
             # wait and retry with exponential backoff: 5s, 10s, 20s, 40s.
             if r.status_code == 429 or r.status_code >= 500:
@@ -245,3 +249,44 @@ def caiso_storage(refresh: bool = False) -> pd.DataFrame:
     daily["batt_fleet_gwh"] = (daily["batt_discharge_gwh"].shift(1)
                                .rolling(90, min_periods=30).quantile(0.95))
     return daily
+
+
+def _hourly_series(ba: str, route: str, facets: dict, name: str, refresh: bool) -> pd.DataFrame:
+    """One EIA-930 hourly route for one BA (UTC hour-ending periods), long format, cached."""
+    path = CACHE / f"eia930_{ba}_{name}_hourly.parquet"
+    if path.exists() and not refresh:
+        return pd.read_parquet(path)
+    d = eia_api(route, {"respondent": [ba], **facets}, f"{EIA930_FIRST_DAY}T00",
+                f"{date.today().isoformat()}T00", frequency="hourly")
+    key = "fueltype" if "fueltype" in d.columns else "type"
+    d = d[["period", key, "value"]].rename(columns={key: "series"})
+    d.to_parquet(path, index=False)
+    return d
+
+
+def hourly_grid(ba: str, tz: str, refresh: bool = False) -> pd.DataFrame:
+    """Wide hourly table for one balancing authority, in its local time.
+
+    Columns: date, he (hour ending 1-24), demand, solar, wind, gas_gen, other, battery (MW),
+    net_load = demand - solar - wind, and storage = other + battery (net storage output; see
+    the thesis scripts for how each market reports it).
+    """
+    gen = _hourly_series(ba, "electricity/rto/fuel-type-data",
+                         {"fueltype": ["SUN", "WND", "NG", "OTH", "BAT"]}, "fuel", refresh)
+    dem = _hourly_series(ba, "electricity/rto/region-data", {"type": ["D"]}, "demand", refresh)
+    d = pd.concat([gen, dem.assign(series="D")])
+    # EIA-930 periods are UTC and mark the END of the hour, the same convention as ISO "hour
+    # ending". Step back one hour to the hour's start, convert to local time, and the local date
+    # plus (start hour + 1) is the delivery date and hour ending.
+    start = (d["period"] - pd.Timedelta("1h")).dt.tz_localize("UTC").dt.tz_convert(tz).dt.tz_localize(None)
+    d = d.assign(date=start.dt.normalize(), he=start.dt.hour + 1)
+    wide = d.pivot_table(index=["date", "he"], columns="series", values="value", aggfunc="mean").reset_index()
+    wide = wide.rename(columns={"D": "demand", "SUN": "solar", "WND": "wind", "NG": "gas_gen",
+                                "OTH": "other", "BAT": "battery"})
+    for c in ("solar", "wind", "battery", "other"):
+        if c not in wide:
+            wide[c] = 0.0
+    wide[["solar", "wind"]] = wide[["solar", "wind"]].fillna(0.0)
+    wide["net_load"] = wide["demand"] - wide["solar"] - wide["wind"]
+    wide["storage"] = wide["other"].fillna(0) + wide["battery"].fillna(0)
+    return wide
